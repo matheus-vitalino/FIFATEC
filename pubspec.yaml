@@ -1,0 +1,42 @@
+name: fifatec
+description: Gerenciador de futebol - FIFATEC
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+  sqflite: ^2.3.0
+  path_provider: ^2.1.1
+  path: ^1.8.3
+  image_picker: ^1.0.4
+  uuid: ^4.2.1
+  intl: ^0.18.1
+  archive: ^3.4.6
+  share_plus: ^7.2.1
+  file_picker: ^8.0.0
+  permission_handler: ^11.1.0
+  flutter_animate: ^4.3.0
+  audioplayers: ^5.2.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/images/icon.png"
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/images/
+    - assets/audio/whistle.mp3

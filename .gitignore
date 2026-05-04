@@ -1,0 +1,75 @@
+# =========================
+# MISCELLANEOUS
+# =========================
+*.class
+*.log
+*.pyc
+*.swp
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE / EDITORES
+# =========================
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code (opcional - descomente se quiser ignorar)
+#.vscode/
+
+# =========================
+# FLUTTER / DART
+# =========================
+.dart_tool/
+.packages
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+
+# =========================
+# ANDROID
+# =========================
+android/.gradle/
+android/local.properties
+android/key.properties
+/android/app/build/
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Keystore (segurança)
+*.jks
+*.keystore
+
+# =========================
+# IOS
+# =========================
+ios/Pods/
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+
+# =========================
+# SYMBOLS / OBFUSCAÇÃO
+# =========================
+app.*.symbols
+app.*.map.json
+
+# =========================
+# ARQUIVOS SENSÍVEIS
+# =========================
+.env
