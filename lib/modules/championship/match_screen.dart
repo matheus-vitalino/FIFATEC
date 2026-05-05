@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/match.dart';
+import '../../core/models/player.dart';
+import '../../core/models/team.dart' show Team, TeamPlayer;
 import '../../core/models/team.dart';
 import '../../core/repositories/championship_repository.dart';
 import '../../core/repositories/match_repository.dart';
@@ -265,6 +267,136 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
+  // ── Substituições ────────────────────────────────────────────
+  Future<void> _showSubstitutionPicker(Team team) async {
+    // Coleta jogadores disponíveis (não estão ativos no time)
+    final allPlayers = await _playerRepo.getAll();
+    final activePlayers = team.activePlayers;
+    // Jogadores que já foram para fora (substituídos)
+    final outPlayerIds = _match!.substitutions
+        .where((s) => s.teamId == team.id)
+        .map((s) => s.playerOutId)
+        .toSet();
+    // Jogadores que entraram como substitutos
+    final inPlayerIds = _match!.substitutions
+        .where((s) => s.teamId == team.id)
+        .map((s) => s.playerInId)
+        .toSet();
+
+    // Candidatos a sair: jogadores ativos no time
+    TeamPlayer? playerOut;
+    // Candidatos a entrar: qualquer jogador não no time ativo
+    Player? playerIn;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          backgroundColor: AppColors.card,
+          title: Text('Substituição — ${team.name}',
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 15)),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Quem SAI:', style: TextStyle(color: AppColors.loss, fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                ...activePlayers.map((tp) => GestureDetector(
+                  onTap: () => setS(() => playerOut = tp),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    margin: const EdgeInsets.only(bottom: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: playerOut?.playerId == tp.playerId
+                          ? AppColors.loss.withOpacity(0.15)
+                          : AppColors.surfaceLight,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: playerOut?.playerId == tp.playerId ? AppColors.loss : Colors.transparent,
+                      ),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.arrow_upward_rounded, color: AppColors.loss, size: 14),
+                      const SizedBox(width: 8),
+                      Text(tp.playerName, style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+                    ]),
+                  ),
+                )),
+                const SizedBox(height: 12),
+                const Text('Quem ENTRA:', style: TextStyle(color: AppColors.win, fontSize: 12, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                ...allPlayers
+                  .where((p) => !activePlayers.any((tp) => tp.playerId == p.id) && p.id != (playerOut?.playerId ?? ''))
+                  .map((p) => GestureDetector(
+                  onTap: () => setS(() => playerIn = p),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 120),
+                    margin: const EdgeInsets.only(bottom: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: playerIn?.id == p.id
+                          ? AppColors.win.withOpacity(0.15)
+                          : AppColors.surfaceLight,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: playerIn?.id == p.id ? AppColors.win : Colors.transparent,
+                      ),
+                    ),
+                    child: Row(children: [
+                      const Icon(Icons.arrow_downward_rounded, color: AppColors.win, size: 14),
+                      const SizedBox(width: 8),
+                      Text(p.name, style: const TextStyle(color: AppColors.textPrimary, fontSize: 13)),
+                    ]),
+                  ),
+                )),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+            ElevatedButton(
+              onPressed: (playerOut != null && playerIn != null)
+                  ? () {
+                      Navigator.pop(ctx);
+                      _applySubstitution(team, playerOut!, playerIn!);
+                    }
+                  : null,
+              style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+              child: const Text('Confirmar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _applySubstitution(Team team, TeamPlayer out, Player inPlayer) async {
+    if (_match == null) return;
+    final sub = SubstitutionEvent(
+      teamId: team.id,
+      playerOutId: out.playerId,
+      playerOutName: out.playerName,
+      playerInId: inPlayer.id,
+      playerInName: inPlayer.name,
+      timeSeconds: _elapsed,
+    );
+
+    // Atualiza o time na partida
+    final teamRef = _match!.teamA.id == team.id ? _match!.teamA : _match!.teamB;
+    final idx = teamRef.players.indexWhere((tp) => tp.playerId == out.playerId);
+    if (idx != -1) {
+      teamRef.players[idx] = TeamPlayer(
+        playerId: inPlayer.id,
+        playerName: inPlayer.name,
+      );
+    }
+
+    setState(() => _match!.substitutions.add(sub));
+    await _matchRepo.save(_match!);
+  }
+
   // ── Confirmar resultado ───────────────────────────────────────
 
   Future<void> _confirmResult() async {
@@ -317,14 +449,30 @@ class _MatchScreenState extends State<MatchScreen> {
 
   Future<void> _updatePlayerStats(String? winnerId, bool isDraw) async {
     if (_match == null) return;
+    final isFinal = _match!.matchType == MatchType.final_;
+    final isSemifinal = _match!.matchType == MatchType.semifinal;
+
     for (final team in [_match!.teamA, _match!.teamB]) {
       final isWinner = team.id == winnerId;
       final isLoser = !isDraw && !isWinner;
-      for (final tp in team.activePlayers) {
-        await _playerRepo.updateStats(tp.playerId,
+
+      // Coleta jogadores ativos + substitutos que entraram
+      final playerIds = <String>{};
+      for (final tp in team.activePlayers) playerIds.add(tp.playerId);
+      for (final sub in _match!.substitutions.where((s) => s.teamId == team.id)) {
+        playerIds.add(sub.playerInId);
+      }
+
+      for (final pid in playerIds) {
+        await _playerRepo.updateStats(pid,
           matchesDelta: 1,
           winsDelta: isWinner ? 1 : 0,
           lossesDelta: isLoser ? 1 : 0,
+          // Na final: vencedor = título, perdedor = vice
+          titlesDelta: (isFinal && isWinner) ? 1 : 0,
+          vicesDelta: (isFinal && isLoser) ? 1 : 0,
+          // Semifinal e final contam como "final" nas estatísticas
+          finalsDelta: (isFinal || isSemifinal) ? 1 : 0,
         );
       }
     }
@@ -382,7 +530,7 @@ class _MatchScreenState extends State<MatchScreen> {
           const SizedBox(height: 8),
           _buildScoreboard(m, aScore, bScore, finished),
           const SizedBox(height: 16),
-          if (!finished)
+          if (!finished) ...[
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(
@@ -393,6 +541,18 @@ class _MatchScreenState extends State<MatchScreen> {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Expanded(child: _subButton(m.teamA)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _subButton(m.teamB)),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 16),
           _buildGoalLog(m, finished),
         ],
@@ -599,6 +759,28 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
+  Widget _subButton(Team team) {
+    return OutlinedButton(
+      onPressed: () => _showSubstitutionPicker(team),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: AppColors.draw,
+        side: const BorderSide(color: AppColors.draw),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.swap_horiz_rounded, size: 16),
+          const SizedBox(width: 6),
+          Flexible(child: Text('Sub ${team.name}',
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              overflow: TextOverflow.ellipsis)),
+        ],
+      ),
+    );
+  }
+
   Widget _buildGoalLog(MatchModel m, bool finished) {
     if (m.goals.isEmpty) {
       return Padding(
@@ -650,6 +832,49 @@ class _MatchScreenState extends State<MatchScreen> {
               ),
             );
           }),
+          // Log de substituições
+          if (m.substitutions.isNotEmpty) ...[
+            const SectionHeader(title: 'Substituições'),
+            ...m.substitutions.map((sub) {
+              final isTeamA = sub.teamId == m.teamA.id;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.card,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.swap_horiz_rounded, color: AppColors.draw, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          RichText(text: TextSpan(
+                            style: const TextStyle(fontSize: 12),
+                            children: [
+                              TextSpan(text: sub.playerOutName,
+                                  style: const TextStyle(color: AppColors.loss, fontWeight: FontWeight.bold)),
+                              const TextSpan(text: ' → ', style: TextStyle(color: AppColors.textHint)),
+                              TextSpan(text: sub.playerInName,
+                                  style: const TextStyle(color: AppColors.win, fontWeight: FontWeight.bold)),
+                            ],
+                          )),
+                          Text(isTeamA ? m.teamA.name : m.teamB.name,
+                              style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                        ],
+                      ),
+                    ),
+                    if (_showGoalTime)
+                      Text(AppDateUtils.formatDuration(sub.timeSeconds),
+                          style: const TextStyle(color: AppColors.textHint, fontSize: 12)),
+                  ],
+                ),
+              );
+            }),
+          ],
           const SizedBox(height: 80),
         ],
       ),

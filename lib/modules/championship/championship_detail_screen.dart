@@ -52,21 +52,39 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
     if (_champ == null || _champ!.teams.length < 2) return;
 
     Team? teamA, teamB;
+    MatchType matchType = MatchType.normal;
+
     await showDialog(
       context: context,
       builder: (_) => _SelectTeamsDialog(
         teams: _champ!.teams,
-        onSelect: (a, b) { teamA = a; teamB = b; },
+        onSelect: (a, b, t) {
+          teamA = a;
+          teamB = b;
+          matchType = t;
+        },
       ),
     );
 
     if (teamA == null || teamB == null) return;
+
+    String roundLabel;
+    switch (matchType) {
+      case MatchType.final_:
+        roundLabel = 'Final';
+      case MatchType.semifinal:
+        roundLabel = 'Semifinal';
+      case MatchType.normal:
+        roundLabel = 'Partida';
+    }
 
     final match = MatchModel(
       id: _uuid.v4(),
       championshipId: _champ!.id,
       teamA: teamA!,
       teamB: teamB!,
+      matchType: matchType,
+      round: roundLabel,
     );
     await _matchRepo.save(match);
     _champ!.matchIds.add(match.id);
@@ -664,7 +682,7 @@ class _TeamCard extends StatelessWidget {
 // ── Diálogo de seleção de times ──────────────────────────────────
 class _SelectTeamsDialog extends StatefulWidget {
   final List<Team> teams;
-  final Function(Team, Team) onSelect;
+  final Function(Team, Team, MatchType) onSelect;
   const _SelectTeamsDialog({required this.teams, required this.onSelect});
 
   @override
@@ -673,6 +691,7 @@ class _SelectTeamsDialog extends StatefulWidget {
 
 class _SelectTeamsDialogState extends State<_SelectTeamsDialog> {
   Team? _a, _b;
+  MatchType _matchType = MatchType.normal;
 
   @override
   Widget build(BuildContext context) {
@@ -680,44 +699,94 @@ class _SelectTeamsDialogState extends State<_SelectTeamsDialog> {
     return AlertDialog(
       backgroundColor: AppColors.card,
       title: const Text('Nova Partida', style: TextStyle(color: AppColors.textPrimary)),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          DropdownButtonFormField<Team>(
-            value: _a,
-            decoration: const InputDecoration(labelText: 'Time A'),
-            dropdownColor: AppColors.surface,
-            style: const TextStyle(color: AppColors.textPrimary),
-            items: widget.teams.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
-            onChanged: (v) => setState(() => _a = v),
-          ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<Team>(
-            value: _b,
-            decoration: const InputDecoration(labelText: 'Time B'),
-            dropdownColor: AppColors.surface,
-            style: const TextStyle(color: AppColors.textPrimary),
-            // Filtra para não mostrar o mesmo time selecionado em A
-            items: widget.teams
-                .where((t) => _a == null || t.id != _a!.id)
-                .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))
-                .toList(),
-            onChanged: (v) => setState(() => _b = v),
-          ),
-          if (_a != null && _b != null && _a!.id == _b!.id)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text('Escolha times diferentes', style: TextStyle(color: AppColors.loss, fontSize: 12)),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            DropdownButtonFormField<Team>(
+              value: _a,
+              decoration: const InputDecoration(labelText: 'Time A'),
+              dropdownColor: AppColors.surface,
+              style: const TextStyle(color: AppColors.textPrimary),
+              items: widget.teams.map((t) => DropdownMenuItem(value: t, child: Text(t.name))).toList(),
+              onChanged: (v) => setState(() => _a = v),
             ),
-        ],
+            const SizedBox(height: 12),
+            DropdownButtonFormField<Team>(
+              value: _b,
+              decoration: const InputDecoration(labelText: 'Time B'),
+              dropdownColor: AppColors.surface,
+              style: const TextStyle(color: AppColors.textPrimary),
+              items: widget.teams
+                  .where((t) => _a == null || t.id != _a!.id)
+                  .map((t) => DropdownMenuItem(value: t, child: Text(t.name)))
+                  .toList(),
+              onChanged: (v) => setState(() => _b = v),
+            ),
+            if (_a != null && _b != null && _a!.id == _b!.id)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('Escolha times diferentes', style: TextStyle(color: AppColors.loss, fontSize: 12)),
+              ),
+            const SizedBox(height: 16),
+            const Text('Tipo de partida', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+            const SizedBox(height: 8),
+            ...MatchType.values.map((type) {
+              final labels = {
+                MatchType.normal: ('Partida Normal', Icons.sports_soccer, AppColors.textSecondary),
+                MatchType.semifinal: ('Semifinal', Icons.star_half_rounded, AppColors.draw),
+                MatchType.final_: ('Final 🏆', Icons.emoji_events_rounded, AppColors.accent),
+              };
+              final (label, icon, color) = labels[type]!;
+              return GestureDetector(
+                onTap: () => setState(() => _matchType = type),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  margin: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: _matchType == type ? color.withOpacity(0.15) : AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: _matchType == type ? color : Colors.transparent,
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(icon, color: _matchType == type ? color : AppColors.textHint, size: 18),
+                      const SizedBox(width: 10),
+                      Text(label, style: TextStyle(
+                        color: _matchType == type ? color : AppColors.textSecondary,
+                        fontWeight: _matchType == type ? FontWeight.bold : FontWeight.normal,
+                        fontSize: 13,
+                      )),
+                      if (type == MatchType.final_) ...[
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.accent.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text('conta vices', style: TextStyle(color: AppColors.accent, fontSize: 10)),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
+        ),
       ),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
         ElevatedButton(
-          // Só habilita quando dois times diferentes estão selecionados
           onPressed: canConfirm
               ? () {
-                  widget.onSelect(_a!, _b!);
+                  widget.onSelect(_a!, _b!, _matchType);
                   Navigator.pop(context);
                 }
               : null,

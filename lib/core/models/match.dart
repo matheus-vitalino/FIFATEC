@@ -1,5 +1,43 @@
 import 'team.dart';
 
+class SubstitutionEvent {
+  final String teamId;
+  final String playerOutId;
+  final String playerOutName;
+  final String playerInId;
+  final String playerInName;
+  final int timeSeconds;
+
+  SubstitutionEvent({
+    required this.teamId,
+    required this.playerOutId,
+    required this.playerOutName,
+    required this.playerInId,
+    required this.playerInName,
+    required this.timeSeconds,
+  });
+
+  Map<String, dynamic> toMap() => {
+        'teamId': teamId,
+        'playerOutId': playerOutId,
+        'playerOutName': playerOutName,
+        'playerInId': playerInId,
+        'playerInName': playerInName,
+        'timeSeconds': timeSeconds,
+      };
+
+  factory SubstitutionEvent.fromMap(Map<String, dynamic> map) => SubstitutionEvent(
+        teamId: (map['teamId'] as String?) ?? '',
+        playerOutId: (map['playerOutId'] as String?) ?? '',
+        playerOutName: (map['playerOutName'] as String?) ?? '',
+        playerInId: (map['playerInId'] as String?) ?? '',
+        playerInName: (map['playerInName'] as String?) ?? '',
+        timeSeconds: (map['timeSeconds'] as int?) ?? 0,
+      );
+}
+
+enum MatchType { normal, semifinal, final_ }
+
 class GoalEvent {
   final String playerId;
   final String playerName;
@@ -41,6 +79,8 @@ class MatchModel {
   Team teamA;
   Team teamB;
   List<GoalEvent> goals;
+  List<SubstitutionEvent> substitutions;
+  MatchType matchType;
   MatchStatus status;
   String? winnerId;
   bool isDraw;
@@ -58,6 +98,8 @@ class MatchModel {
     required this.teamA,
     required this.teamB,
     List<GoalEvent>? goals,
+    List<SubstitutionEvent>? substitutions,
+    this.matchType = MatchType.normal,
     this.status = MatchStatus.pending,
     this.winnerId,
     this.isDraw = false,
@@ -68,6 +110,7 @@ class MatchModel {
     this.durationSeconds = 300,
     this.showGoalTime = true,
   })  : goals = goals ?? [],
+        substitutions = substitutions ?? [],
         date = date ?? DateTime.now();
 
   int get teamAScore => goals.where((g) => g.teamId == teamA.id).length;
@@ -81,6 +124,8 @@ class MatchModel {
         'teamA': teamA.toMap(),
         'teamB': teamB.toMap(),
         'goals': goals.map((g) => g.toMap()).toList(),
+        'substitutions': substitutions.map((s) => s.toMap()).toList(),
+        'matchType': matchType.index,
         'status': status.index,
         'winnerId': winnerId,
         'isDraw': isDraw ? 1 : 0,
@@ -101,6 +146,8 @@ class MatchModel {
       teamA: Team.fromMap((map['teamA'] as Map<String, dynamic>?) ?? {}),
       teamB: Team.fromMap((map['teamB'] as Map<String, dynamic>?) ?? {}),
       goals: ((map['goals'] as List?) ?? []).map((g) => GoalEvent.fromMap(g as Map<String, dynamic>)).toList(),
+      substitutions: ((map['substitutions'] as List?) ?? []).map((s) => SubstitutionEvent.fromMap(s as Map<String, dynamic>)).toList(),
+      matchType: MatchType.values[(map['matchType'] as int? ?? 0).clamp(0, MatchType.values.length - 1)],
       status: statusIndex >= 0 && statusIndex < MatchStatus.values.length ? MatchStatus.values[statusIndex] : MatchStatus.pending,
       winnerId: map['winnerId'] as String?,
       isDraw: (map['isDraw'] as int? ?? 0) == 1,

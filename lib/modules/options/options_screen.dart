@@ -274,7 +274,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
                 const SizedBox(height: 40),
                 Center(
                   child: Text(
-                    'AppTiminho v1.0.0',
+                    'FIFATEC v1.0.0',
                     style: TextStyle(color: AppColors.textHint, fontSize: 12),
                   ),
                 ),

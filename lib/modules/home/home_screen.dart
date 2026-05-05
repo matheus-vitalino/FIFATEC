@@ -149,7 +149,7 @@ class HomeScreen extends StatelessWidget {
 
   Widget _buildFooter() {
     return Text(
-      'v1.0.0 • AppTiminho',
+      'v1.0.0 • FIFATEC',
       style: TextStyle(color: AppColors.textHint, fontSize: 11),
     );
   }

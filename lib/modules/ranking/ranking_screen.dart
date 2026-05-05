@@ -28,7 +28,7 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
   @override
   void initState() {
     super.initState();
-    _tab = TabController(length: 3, vsync: this);
+    _tab = TabController(length: 4, vsync: this);
     _load();
   }
 
@@ -47,16 +47,34 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
 
   List<_Duo> get _bestDuos {
     final Map<String, _Duo> duos = {};
-    final sorted = [..._players]..sort((a, b) => (b.wins + b.goals).compareTo(a.wins + a.goals));
-    for (int i = 0; i < sorted.length - 1; i++) {
-      for (int j = i + 1; j < sorted.length; j++) {
-        final key = '${sorted[i].id}_${sorted[j].id}';
-        final score = sorted[i].wins + sorted[j].wins + sorted[i].goals + sorted[j].goals;
-        duos[key] = _Duo(sorted[i], sorted[j], score);
+    for (int i = 0; i < _players.length - 1; i++) {
+      for (int j = i + 1; j < _players.length; j++) {
+        final key = '${_players[i].id}_${_players[j].id}';
+        // Score = títulos combinados (base) + bônus de vitórias
+        final score = (_players[i].titles + _players[j].titles) * 10
+            + _players[i].wins + _players[j].wins;
+        duos[key] = _Duo(_players[i], _players[j], score);
       }
     }
     final list = duos.values.toList()..sort((a, b) => b.score.compareTo(a.score));
-    return list.take(10).toList();
+    return list.where((d) => d.score > 0).take(10).toList();
+  }
+
+  List<_Trio> get _bestTrios {
+    final Map<String, _Trio> trios = {};
+    for (int i = 0; i < _players.length - 2; i++) {
+      for (int j = i + 1; j < _players.length - 1; j++) {
+        for (int k = j + 1; k < _players.length; k++) {
+          final a = _players[i], b = _players[j], c = _players[k];
+          final key = '${a.id}_${b.id}_${c.id}';
+          final score = (a.titles + b.titles + c.titles) * 10
+              + a.wins + b.wins + c.wins;
+          trios[key] = _Trio(a, b, c, score);
+        }
+      }
+    }
+    final list = trios.values.toList()..sort((a, b) => b.score.compareTo(a.score));
+    return list.where((t) => t.score > 0).take(10).toList();
   }
 
   Future<void> _selectSeason(Season season) async {
@@ -190,7 +208,7 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
           indicatorColor: AppColors.accent,
           labelColor: AppColors.accent,
           unselectedLabelColor: AppColors.textHint,
-          tabs: const [Tab(text: 'Jogadores'), Tab(text: 'Duplas'), Tab(text: 'Categorias')],
+          tabs: const [Tab(text: 'Jogadores'), Tab(text: 'Duplas'), Tab(text: 'Trios'), Tab(text: 'Categorias')],
         ),
       ),
       body: _loading
@@ -236,7 +254,7 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
                 Expanded(
                   child: TabBarView(
                     controller: _tab,
-                    children: [_buildPlayerRanking(), _buildDuoRanking(), _buildCategoryRanking()],
+                    children: [_buildPlayerRanking(), _buildDuoRanking(), _buildTrioRanking(), _buildCategoryRanking()],
                   ),
                 ),
               ],
@@ -283,6 +301,22 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
       padding: const EdgeInsets.all(16),
       itemCount: duos.length,
       itemBuilder: (_, i) => _DuoCard(duo: duos[i], position: i + 1, index: i),
+    );
+  }
+
+  Widget _buildTrioRanking() {
+    final trios = _bestTrios;
+    if (trios.isEmpty) {
+      return const EmptyState(
+        icon: Icons.people_rounded,
+        title: 'Sem dados de trios',
+        subtitle: 'Jogue partidas para gerar o ranking de trios',
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: trios.length,
+      itemBuilder: (_, i) => _TrioCard(trio: trios[i], position: i + 1, index: i),
     );
   }
 
@@ -403,6 +437,78 @@ class _ActionChip extends StatelessWidget {
   }
 }
 
+class _Trio {
+  final Player a, b, c;
+  final int score;
+  const _Trio(this.a, this.b, this.c, this.score);
+}
+
+class _TrioCard extends StatelessWidget {
+  final _Trio trio;
+  final int position, index;
+  const _TrioCard({required this.trio, required this.position, required this.index});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.surfaceLight),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 28,
+            child: Text('#$position', style: const TextStyle(
+              color: AppColors.textHint, fontWeight: FontWeight.bold, fontSize: 13,
+            ), textAlign: TextAlign.center),
+          ),
+          const SizedBox(width: 8),
+          // Três avatares sobrepostos
+          SizedBox(
+            width: 80,
+            height: 40,
+            child: Stack(
+              children: [
+                PlayerAvatar(photoPath: trio.a.photoPath, name: trio.a.name, size: 38),
+                Positioned(left: 22, child: PlayerAvatar(photoPath: trio.b.photoPath, name: trio.b.name, size: 38)),
+                Positioned(left: 44, child: PlayerAvatar(photoPath: trio.c.photoPath, name: trio.c.name, size: 38)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${trio.a.name}, ${trio.b.name} & ${trio.c.name}',
+                  style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 12),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '${trio.a.titles + trio.b.titles + trio.c.titles} títulos combinados',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+          Column(
+            children: [
+              Text('${trio.score}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold, fontSize: 18)),
+              const Text('pts', style: TextStyle(color: AppColors.textHint, fontSize: 10)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _Duo {
   final Player a, b;
   final int score;
@@ -486,6 +592,7 @@ class _RankCard extends StatelessWidget {
   }
 }
 
+
 class _DuoCard extends StatelessWidget {
   final _Duo duo;
   final int position, index;
@@ -504,17 +611,66 @@ class _DuoCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          SizedBox(width: 34, child: Text('#$position', style: const TextStyle(color: AppColors.textHint, fontWeight: FontWeight.bold))),
-          const SizedBox(width: 10),
+          SizedBox(
+            width: 28,
+            child: Text(
+              '#$position',
+              style: const TextStyle(
+                color: AppColors.textHint,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 58,
+            height: 40,
+            child: Stack(
+              children: [
+                PlayerAvatar(photoPath: duo.a.photoPath, name: duo.a.name, size: 38),
+                Positioned(
+                  left: 20,
+                  child: PlayerAvatar(photoPath: duo.b.photoPath, name: duo.b.name, size: 38),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('${duo.a.name} + ${duo.b.name}', style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 4),
-                Text('${duo.score} pontos combinados', style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                Text(
+                  '${duo.a.name} & ${duo.b.name}',
+                  style: const TextStyle(
+                    color: AppColors.textPrimary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  '${duo.a.titles + duo.b.titles} títulos combinados',
+                  style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                ),
               ],
             ),
+          ),
+          Column(
+            children: [
+              Text(
+                '${duo.score}',
+                style: const TextStyle(
+                  color: AppColors.accent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 18,
+                ),
+              ),
+              const Text('pts', style: TextStyle(color: AppColors.textHint, fontSize: 10)),
+            ],
           ),
         ],
       ),
@@ -522,7 +678,8 @@ class _DuoCard extends StatelessWidget {
   }
 }
 
-class _CategorySection extends StatelessWidget {
+class _CategorySection extends StatelessWidget
+ {
   final String title;
   final Color color;
   final List<Player> players;

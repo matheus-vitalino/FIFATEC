@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/player.dart';
@@ -39,10 +40,8 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: AppColors.card,
         title: const Text('Excluir jogador?', style: TextStyle(color: AppColors.textPrimary)),
-        content: Text(
-          'Tem certeza que deseja excluir ${_player?.name}?',
-          style: const TextStyle(color: AppColors.textSecondary),
-        ),
+        content: Text('Tem certeza que deseja excluir ${_player?.name}?',
+            style: const TextStyle(color: AppColors.textSecondary)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
           TextButton(
@@ -57,6 +56,17 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
       await _repo.delete(_player!.id);
       if (mounted) Navigator.pop(context);
     }
+  }
+
+  void _openFullScreenPhoto() {
+    if (_player?.photoPath == null) return;
+    final path = _player!.photoPath!;
+    if (!File(path).existsSync()) return;
+
+    Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => _FullScreenPhoto(photoPath: path, playerName: _player!.name),
+    ));
   }
 
   double get _winRate {
@@ -96,13 +106,15 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
 
   Widget _buildBody() {
     final p = _player!;
+    final hasPhoto = p.photoPath != null && File(p.photoPath!).existsSync();
+
     return SingleChildScrollView(
       child: Column(
         children: [
-          // Header
+          // ── Header com foto grande ──────────────────────────
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 32, horizontal: 24),
+            padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
             decoration: const BoxDecoration(
               gradient: LinearGradient(
                 colors: [Color(0xFF1A2634), Color(0xFF0F1923)],
@@ -112,8 +124,57 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             ),
             child: Column(
               children: [
-                PlayerAvatar(photoPath: p.photoPath, name: p.name, size: 90, showBorder: true),
-                const SizedBox(height: 16),
+                // Foto grande com toque para tela cheia
+                GestureDetector(
+                  onTap: hasPhoto ? _openFullScreenPhoto : null,
+                  child: Hero(
+                    tag: 'player_photo_${p.id}',
+                    child: Stack(
+                      alignment: Alignment.bottomRight,
+                      children: [
+                        Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(color: AppColors.accent, width: 3),
+                            boxShadow: [
+                              BoxShadow(
+                                color: AppColors.accent.withOpacity(0.25),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: ClipOval(
+                            child: hasPhoto
+                                ? Image.file(File(p.photoPath!), fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => _avatarFallback(p))
+                                : _avatarFallback(p),
+                          ),
+                        ),
+                        if (hasPhoto)
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(
+                              color: AppColors.primary,
+                              shape: BoxShape.circle,
+                              border: Border.all(color: AppColors.background, width: 2),
+                            ),
+                            child: const Icon(Icons.fullscreen_rounded, color: Colors.white, size: 16),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (hasPhoto)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('Toque para ver em tela cheia',
+                        style: TextStyle(color: AppColors.textHint.withOpacity(0.7), fontSize: 11)),
+                  ),
+                const SizedBox(height: 14),
                 Text(p.name, style: const TextStyle(
                   color: AppColors.textPrimary, fontSize: 24, fontWeight: FontWeight.bold,
                 )),
@@ -124,7 +185,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                   ), textAlign: TextAlign.center),
                 ],
                 const SizedBox(height: 16),
-                // Win rate bar
+                // Win rate
                 Column(
                   children: [
                     Row(
@@ -152,6 +213,7 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             ),
           ),
 
+          // ── Stats ─────────────────────────────────────────
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -159,7 +221,6 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               children: [
                 const SectionHeader(title: 'Estatísticas'),
                 const SizedBox(height: 8),
-                // Grid de stats
                 GridView.count(
                   crossAxisCount: 3,
                   shrinkWrap: true,
@@ -182,7 +243,6 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                         icon: Icons.star_rounded, color: AppColors.draw),
                   ],
                 ),
-
                 const SizedBox(height: 16),
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -211,6 +271,44 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _avatarFallback(Player p) {
+    return PlayerAvatar(photoPath: null, name: p.name, size: 120);
+  }
+}
+
+// ── Tela cheia da foto ─────────────────────────────────────────────
+class _FullScreenPhoto extends StatelessWidget {
+  final String photoPath;
+  final String playerName;
+
+  const _FullScreenPhoto({required this.photoPath, required this.playerName});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(playerName, style: const TextStyle(color: Colors.white)),
+      ),
+      body: Center(
+        child: Hero(
+          tag: 'player_photo_full_$photoPath',
+          child: InteractiveViewer(
+            minScale: 0.8,
+            maxScale: 5.0,
+            child: Image.file(
+              File(photoPath),
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const Icon(Icons.broken_image, color: Colors.white54, size: 80),
+            ),
+          ),
+        ),
       ),
     );
   }
