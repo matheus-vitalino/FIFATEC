@@ -1,21 +1,21 @@
-<<<<<<< HEAD
-# FIFATEC
-=======
-# app_timinho
+# ⚽ FIFATEC
 
-A new Flutter project.
+Aplicativo para organização de partidas e campeonatos de futebol na escola de forma simples e eficiente.
 
-## Getting Started
+## 📱 Funcionalidades
 
-This project is a starting point for a Flutter application.
+- ⏱️ Cronômetro com início automático e atraso configurável  
+- 👥 Cadastro de jogadores com foto
+- 🔀 Montagem automática de times
+- 🏆 Sistema de campeonatos com histórico
+- 📊 Ranking por desempenho (jogadores, duplas e trios)  
 
-A few resources to get you started if this is your first Flutter project:
+## 🎯 Objetivo
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Facilitar a organização de jogos entre amigos, automatizando tempo, times e resultados.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
->>>>>>> 6dfd73d (Primeira versão do FIFATEC)
+## 🛠️ Tecnologias
+
+- Flutter  
+- Dart  
+- SQLite (sqflite)  
