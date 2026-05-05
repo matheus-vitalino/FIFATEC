@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/championship.dart';
 import '../../core/models/match.dart';
@@ -8,6 +9,7 @@ import '../../core/repositories/match_repository.dart';
 import '../../core/services/season_manager.dart';
 import '../../core/utils/date_utils.dart';
 import '../../shared/widgets/custom_app_bar.dart';
+import '../../shared/widgets/full_screen_photo_view.dart';
 
 class HistoryScreen extends StatefulWidget {
   const HistoryScreen({super.key});
@@ -84,6 +86,14 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     if (mounted) _load();
   }
 
+  void _openWinnerPhoto(String path, String title) {
+    if (!File(path).existsSync()) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => FullScreenPhotoView(photoPath: path, title: title),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -153,19 +163,64 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
               ),
               const SizedBox(height: 6),
               Text('Temporada: ${_selectedSeason?.name ?? ''}', style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
-              if (c.winnerName != null) ...[
-                const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(color: AppColors.accent.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.military_tech_rounded, color: AppColors.accent, size: 16),
-                      const SizedBox(width: 6),
-                      Text('Campeão: ${c.winnerName}', style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold, fontSize: 13)),
-                    ],
-                  ),
+              if (c.winnerName != null || (c.winnerPhotoPath != null && File(c.winnerPhotoPath!).existsSync())) ...[
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    if (c.winnerPhotoPath != null && File(c.winnerPhotoPath!).existsSync())
+                      GestureDetector(
+                        onTap: () => _openWinnerPhoto(c.winnerPhotoPath!, c.winnerName ?? c.name),
+                        child: Hero(
+                          tag: c.winnerPhotoPath!,
+                          child: Container(
+                            width: 54,
+                            height: 54,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppColors.accent.withOpacity(0.45), width: 2),
+                              color: AppColors.surfaceLight,
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: Image.file(
+                                File(c.winnerPhotoPath!),
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => _winnerPhotoPlaceholder(),
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      Container(
+                        width: 54,
+                        height: 54,
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.surfaceLight),
+                        ),
+                        child: _winnerPhotoPlaceholder(),
+                      ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                        decoration: BoxDecoration(color: AppColors.accent.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.military_tech_rounded, color: AppColors.accent, size: 16),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text("Campeão: ${c.winnerName ?? '—'}", style: const TextStyle(color: AppColors.accent, fontWeight: FontWeight.bold, fontSize: 13)),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
               const SizedBox(height: 8),
@@ -198,6 +253,8 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       },
     );
   }
+
+  Widget _winnerPhotoPlaceholder() => const Icon(Icons.emoji_events_rounded, color: AppColors.textHint, size: 24);
 
   Widget _buildMatches() {
     if (_matches.isEmpty) {

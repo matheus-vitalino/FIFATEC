@@ -28,6 +28,7 @@ class _MatchScreenState extends State<MatchScreen> {
   final _champRepo = ChampionshipRepository();
   final _playerRepo = PlayerRepository();
   final _settingsRepo = SettingsRepository();
+  final _seasonRepo = SeasonRepository();
 
   MatchModel? _match;
   bool _loading = true;
@@ -452,6 +453,8 @@ class _MatchScreenState extends State<MatchScreen> {
     final isFinal = _match!.matchType == MatchType.final_;
     final isSemifinal = _match!.matchType == MatchType.semifinal;
 
+    final seasonId = _match!.seasonId ?? (await _seasonRepo.ensureCurrentSeason()).id;
+
     for (final team in [_match!.teamA, _match!.teamB]) {
       final isWinner = team.id == winnerId;
       final isLoser = !isDraw && !isWinner;
@@ -465,6 +468,7 @@ class _MatchScreenState extends State<MatchScreen> {
 
       for (final pid in playerIds) {
         await _playerRepo.updateStats(pid,
+          seasonId: seasonId,
           matchesDelta: 1,
           winsDelta: isWinner ? 1 : 0,
           lossesDelta: isLoser ? 1 : 0,
@@ -478,7 +482,7 @@ class _MatchScreenState extends State<MatchScreen> {
     }
     for (final goal in _match!.goals) {
       if (goal.playerId != 'unknown') {
-        await _playerRepo.updateStats(goal.playerId, goalsDelta: 1);
+        await _playerRepo.updateStats(goal.playerId, seasonId: seasonId, goalsDelta: 1);
       }
     }
   }

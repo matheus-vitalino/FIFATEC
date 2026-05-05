@@ -243,6 +243,26 @@ class _OptionsScreenState extends State<OptionsScreen> {
                       value: _settings.showGoalTime,
                       onChanged: (v) => setState(() => _settings = _settings.copyWith(showGoalTime: v)),
                     ),
+                    const Divider(color: AppColors.surfaceLight, height: 24),
+                    _DropdownRow<DuoRankingMode>(
+                      label: 'Ranking de melhores duplas',
+                      subtitle: 'Escolha como a dupla será pontuada',
+                      value: _settings.duoRankingMode,
+                      items: const [
+                        DropdownMenuItem(
+                          value: DuoRankingMode.sharedGoals,
+                          child: Text('Gols juntos'),
+                        ),
+                        DropdownMenuItem(
+                          value: DuoRankingMode.titlesWins,
+                          child: Text('Títulos e vitórias'),
+                        ),
+                      ],
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _settings = _settings.copyWith(duoRankingMode: v));
+                      },
+                    ),
 
                   ],
                 ),
@@ -421,6 +441,53 @@ class _SwitchRow extends StatelessWidget {
               states.contains(WidgetState.selected)
                   ? AppColors.primary.withOpacity(0.4)
                   : AppColors.surfaceLight),
+        ),
+      ],
+    );
+  }
+}
+
+class _DropdownRow<T> extends StatelessWidget {
+  final String label, subtitle;
+  final T value;
+  final List<DropdownMenuItem<T>> items;
+  final ValueChanged<T?> onChanged;
+
+  const _DropdownRow({
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.items,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+        const SizedBox(height: 2),
+        Text(subtitle, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.surfaceLight),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<T>(
+              value: value,
+              isExpanded: true,
+              dropdownColor: AppColors.card,
+              iconEnabledColor: AppColors.accent,
+              style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+              items: items,
+              onChanged: onChanged,
+            ),
+          ),
         ),
       ],
     );

@@ -1,6 +1,7 @@
 import 'dart:convert';
-import 'package:sqflite/sqflite.dart';
+
 import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
 
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
@@ -18,9 +19,9 @@ class DatabaseHelper {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, 'app_timinho.db');
 
-    return await openDatabase(
+    return openDatabase(
       path,
-      version: 2,
+      version: 3,
       onCreate: _createTables,
       onUpgrade: _onUpgrade,
     );
@@ -28,8 +29,147 @@ class DatabaseHelper {
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
-      try { await db.execute('ALTER TABLE players ADD COLUMN assists INTEGER DEFAULT 0'); } catch (_) {}
-      try { await db.execute('ALTER TABLE matches ADD COLUMN seasonId TEXT'); } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE players ADD COLUMN assists INTEGER DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE matches ADD COLUMN seasonId TEXT');
+      } catch (_) {}
+    }
+
+    if (oldVersion < 3) {
+      await db.execute('''
+        CREATE TABLE IF NOT EXISTS player_season_stats (
+          seasonId TEXT NOT NULL,
+          playerId TEXT NOT NULL,
+          matchesPlayed INTEGER DEFAULT 0,
+          wins INTEGER DEFAULT 0,
+          losses INTEGER DEFAULT 0,
+          goals INTEGER DEFAULT 0,
+          assists INTEGER DEFAULT 0,
+          vices INTEGER DEFAULT 0,
+          finals INTEGER DEFAULT 0,
+          titles INTEGER DEFAULT 0,
+          PRIMARY KEY (seasonId, playerId)
+        )
+      ''');
+
+      await _migrateLegacyPlayersToGlobal(db);
+    }
+  }
+
+  Future<void> _migrateLegacyPlayersToGlobal(Database db) async {
+    final rows = await db.query('players', orderBy: 'createdAt ASC');
+    if (rows.isEmpty) return;
+
+    final groups = <String, List<Map<String, dynamic>>>{};
+    for (final row in rows) {
+      final name = ((row['name'] as String?) ?? '').trim().toLowerCase();
+      final key = name.isEmpty ? (row['id'] as String? ?? '') : name;
+      groups.putIfAbsent(key, () => <Map<String, dynamic>>[]).add(row);
+    }
+
+    for (final entries in groups.values) {
+      if (entries.isEmpty) continue;
+
+      final canonical = Map<String, dynamic>.from(entries.first);
+      final merged = <String, dynamic>{
+        ...canonical,
+        'seasonId': null,
+        'matchesPlayed': 0,
+        'wins': 0,
+        'losses': 0,
+        'goals': 0,
+        'assists': 0,
+        'vices': 0,
+        'finals': 0,
+        'titles': 0,
+      };
+
+      String? bestDescription = canonical['description'] as String?;
+      String? bestPhotoPath = canonical['photoPath'] as String?;
+      DateTime earliest = DateTime.tryParse((canonical['createdAt'] as String?) ?? '') ?? DateTime.now();
+      final seasonTotals = <String, Map<String, int>>{};
+
+      for (final entry in entries) {
+        final matchesPlayed = (entry['matchesPlayed'] as int?) ?? 0;
+        final wins = (entry['wins'] as int?) ?? 0;
+        final losses = (entry['losses'] as int?) ?? 0;
+        final goals = (entry['goals'] as int?) ?? 0;
+        final assists = (entry['assists'] as int?) ?? 0;
+        final vices = (entry['vices'] as int?) ?? 0;
+        final finals = (entry['finals'] as int?) ?? 0;
+        final titles = (entry['titles'] as int?) ?? 0;
+
+        merged['matchesPlayed'] += matchesPlayed;
+        merged['wins'] += wins;
+        merged['losses'] += losses;
+        merged['goals'] += goals;
+        merged['assists'] += assists;
+        merged['vices'] += vices;
+        merged['finals'] += finals;
+        merged['titles'] += titles;
+
+        final seasonId = entry['seasonId'] as String?;
+        if (seasonId != null && seasonId.isNotEmpty) {
+          final totals = seasonTotals.putIfAbsent(seasonId, () => {
+            'matchesPlayed': 0,
+            'wins': 0,
+            'losses': 0,
+            'goals': 0,
+            'assists': 0,
+            'vices': 0,
+            'finals': 0,
+            'titles': 0,
+          });
+          totals['matchesPlayed'] = totals['matchesPlayed']! + matchesPlayed;
+          totals['wins'] = totals['wins']! + wins;
+          totals['losses'] = totals['losses']! + losses;
+          totals['goals'] = totals['goals']! + goals;
+          totals['assists'] = totals['assists']! + assists;
+          totals['vices'] = totals['vices']! + vices;
+          totals['finals'] = totals['finals']! + finals;
+          totals['titles'] = totals['titles']! + titles;
+        }
+
+        final createdAt = DateTime.tryParse((entry['createdAt'] as String?) ?? '');
+        if (createdAt != null && createdAt.isBefore(earliest)) {
+          earliest = createdAt;
+        }
+
+        final desc = entry['description'] as String?;
+        if ((bestDescription == null || bestDescription.isEmpty) && desc != null && desc.isNotEmpty) {
+          bestDescription = desc;
+        }
+        final photo = entry['photoPath'] as String?;
+        if ((bestPhotoPath == null || bestPhotoPath.isEmpty) && photo != null && photo.isNotEmpty) {
+          bestPhotoPath = photo;
+        }
+      }
+
+      merged['description'] = bestDescription;
+      merged['photoPath'] = bestPhotoPath;
+      merged['createdAt'] = earliest.toIso8601String();
+
+      await db.update('players', merged, where: 'id = ?', whereArgs: [merged['id']]);
+
+      for (final seasonEntry in seasonTotals.entries) {
+        final seasonId = seasonEntry.key;
+        final totals = seasonEntry.value;
+        await db.insert(
+          'player_season_stats',
+          {
+            'seasonId': seasonId,
+            'playerId': merged['id'],
+            ...totals,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+
+      for (final extra in entries.skip(1)) {
+        await db.delete('players', where: 'id = ?', whereArgs: [extra['id']]);
+      }
     }
   }
 
@@ -81,6 +221,22 @@ class DatabaseHelper {
         data TEXT NOT NULL
       )
     ''');
+
+    await db.execute('''
+      CREATE TABLE player_season_stats (
+        seasonId TEXT NOT NULL,
+        playerId TEXT NOT NULL,
+        matchesPlayed INTEGER DEFAULT 0,
+        wins INTEGER DEFAULT 0,
+        losses INTEGER DEFAULT 0,
+        goals INTEGER DEFAULT 0,
+        assists INTEGER DEFAULT 0,
+        vices INTEGER DEFAULT 0,
+        finals INTEGER DEFAULT 0,
+        titles INTEGER DEFAULT 0,
+        PRIMARY KEY (seasonId, playerId)
+      )
+    ''');
   }
 
   Future<void> insertPlayer(Map<String, dynamic> player) async {
@@ -96,27 +252,76 @@ class DatabaseHelper {
   Future<void> deletePlayer(String id) async {
     final db = await database;
     await db.delete('players', where: 'id = ?', whereArgs: [id]);
-  }
-
-  Future<void> deletePlayersBySeason(String seasonId) async {
-    final db = await database;
-    await db.delete('players', where: 'seasonId = ?', whereArgs: [seasonId]);
+    await db.delete('player_season_stats', where: 'playerId = ?', whereArgs: [id]);
   }
 
   Future<List<Map<String, dynamic>>> getAllPlayers() async {
     final db = await database;
-    return await db.query('players', orderBy: 'name ASC');
-  }
-
-  Future<List<Map<String, dynamic>>> getPlayersBySeason(String seasonId) async {
-    final db = await database;
-    return await db.query('players', where: 'seasonId = ?', whereArgs: [seasonId], orderBy: 'name ASC');
+    return db.query('players', orderBy: 'name ASC');
   }
 
   Future<Map<String, dynamic>?> getPlayer(String id) async {
     final db = await database;
     final results = await db.query('players', where: 'id = ?', whereArgs: [id]);
     return results.isNotEmpty ? results.first : null;
+  }
+
+  Future<void> savePlayerSeasonStats(Map<String, dynamic> stats) async {
+    final db = await database;
+    await db.insert('player_season_stats', stats, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  Future<Map<String, dynamic>?> getPlayerSeasonStats(String seasonId, String playerId) async {
+    final db = await database;
+    final results = await db.query(
+      'player_season_stats',
+      where: 'seasonId = ? AND playerId = ?',
+      whereArgs: [seasonId, playerId],
+    );
+    return results.isNotEmpty ? results.first : null;
+  }
+
+  Future<List<Map<String, dynamic>>> getPlayerSeasonStatsBySeason(String seasonId) async {
+    final db = await database;
+    return db.query('player_season_stats', where: 'seasonId = ?', whereArgs: [seasonId]);
+  }
+
+  Future<void> deletePlayerSeasonStatsBySeason(String seasonId) async {
+    final db = await database;
+    await db.delete('player_season_stats', where: 'seasonId = ?', whereArgs: [seasonId]);
+  }
+
+  Future<void> deletePlayerSeasonStatsByPlayer(String playerId) async {
+    final db = await database;
+    await db.delete('player_season_stats', where: 'playerId = ?', whereArgs: [playerId]);
+  }
+
+  Future<void> incrementPlayerSeasonStats(
+    String seasonId,
+    String playerId, {
+    int matchesDelta = 0,
+    int winsDelta = 0,
+    int lossesDelta = 0,
+    int goalsDelta = 0,
+    int assistsDelta = 0,
+    int vicesDelta = 0,
+    int finalsDelta = 0,
+    int titlesDelta = 0,
+  }) async {
+    final current = await getPlayerSeasonStats(seasonId, playerId);
+    final updated = {
+      'seasonId': seasonId,
+      'playerId': playerId,
+      'matchesPlayed': ((current?['matchesPlayed'] as int?) ?? 0) + matchesDelta,
+      'wins': ((current?['wins'] as int?) ?? 0) + winsDelta,
+      'losses': ((current?['losses'] as int?) ?? 0) + lossesDelta,
+      'goals': ((current?['goals'] as int?) ?? 0) + goalsDelta,
+      'assists': ((current?['assists'] as int?) ?? 0) + assistsDelta,
+      'vices': ((current?['vices'] as int?) ?? 0) + vicesDelta,
+      'finals': ((current?['finals'] as int?) ?? 0) + finalsDelta,
+      'titles': ((current?['titles'] as int?) ?? 0) + titlesDelta,
+    };
+    await savePlayerSeasonStats(updated);
   }
 
   Future<void> saveChampionship(String id, Map<String, dynamic> data) async {
@@ -202,6 +407,7 @@ class DatabaseHelper {
   Future<Map<String, dynamic>> exportAll() async {
     return {
       'players': await getAllPlayers(),
+      'playerSeasonStats': await _exportPlayerSeasonStats(),
       'championships': await getAllChampionships(),
       'matches': await getAllMatches(),
       'seasons': await getAllSeasons(),
@@ -209,10 +415,16 @@ class DatabaseHelper {
     };
   }
 
+  Future<List<Map<String, dynamic>>> _exportPlayerSeasonStats() async {
+    final db = await database;
+    return db.query('player_season_stats');
+  }
+
   Future<void> importAll(Map<String, dynamic> data) async {
     final db = await database;
     await db.transaction((txn) async {
       await txn.delete('players');
+      await txn.delete('player_season_stats');
       await txn.delete('championships');
       await txn.delete('matches');
       await txn.delete('seasons');
@@ -220,6 +432,9 @@ class DatabaseHelper {
 
       for (final p in (data['players'] as List? ?? [])) {
         await txn.insert('players', p as Map<String, dynamic>, conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      for (final s in (data['playerSeasonStats'] as List? ?? [])) {
+        await txn.insert('player_season_stats', s as Map<String, dynamic>, conflictAlgorithm: ConflictAlgorithm.replace);
       }
       for (final c in (data['championships'] as List? ?? [])) {
         await txn.insert('championships', {'id': (c as Map)['id'], 'data': jsonEncode(c)}, conflictAlgorithm: ConflictAlgorithm.replace);

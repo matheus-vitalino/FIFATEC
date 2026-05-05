@@ -10,6 +10,7 @@ import '../../core/repositories/match_repository.dart';
 import '../../core/services/image_service.dart';
 import '../../core/utils/date_utils.dart';
 import '../../shared/widgets/custom_app_bar.dart';
+import '../../shared/widgets/full_screen_photo_view.dart';
 
 class ChampionshipDetailScreen extends StatefulWidget {
   final String championshipId;
@@ -183,6 +184,15 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
     _champ!.winnerPhotoPath = path;
     await _champRepo.save(_champ!);
     setState(() {});
+  }
+
+  void _openWinnerPhoto() {
+    final path = _champ?.winnerPhotoPath;
+    if (path == null || !File(path).existsSync()) return;
+    Navigator.of(context).push(MaterialPageRoute(
+      fullscreenDialog: true,
+      builder: (_) => FullScreenPhotoView(photoPath: path, title: _champ?.winnerName ?? _champ?.name ?? 'Foto dos vencedores'),
+    ));
   }
 
   String? get _winnerPhotoPath => _champ?.winnerPhotoPath;
@@ -406,22 +416,25 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
         children: [
           // Foto dos vencedores
           GestureDetector(
-            onTap: _pickWinnerPhoto,
-            child: Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.accent.withOpacity(0.5), width: 2),
-                color: AppColors.surfaceLight,
+            onTap: photoPath != null && File(photoPath).existsSync() ? _openWinnerPhoto : _pickWinnerPhoto,
+            child: Hero(
+              tag: photoPath ?? (_champ?.id ?? 'winner-photo'),
+              child: Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppColors.accent.withOpacity(0.5), width: 2),
+                  color: AppColors.surfaceLight,
+                ),
+                child: photoPath != null && File(photoPath).existsSync()
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(11),
+                        child: Image.file(File(photoPath), fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => _photoPlaceholder()),
+                      )
+                    : _photoPlaceholder(),
               ),
-              child: photoPath != null && File(photoPath).existsSync()
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(11),
-                      child: Image.file(File(photoPath), fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => _photoPlaceholder()),
-                    )
-                  : _photoPlaceholder(),
             ),
           ),
           const SizedBox(width: 14),
@@ -450,7 +463,7 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
           IconButton(
             onPressed: _pickWinnerPhoto,
             icon: const Icon(Icons.add_a_photo_rounded, color: AppColors.accent, size: 20),
-            tooltip: 'Foto dos vencedores',
+            tooltip: 'Alterar foto dos vencedores',
           ),
         ],
       ),

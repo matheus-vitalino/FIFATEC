@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+
 import '../models/player.dart';
 import '../models/season.dart';
 import '../repositories/championship_repository.dart';
@@ -27,7 +28,6 @@ class SeasonManager {
       await finishSeason(current.id);
     }
 
-    final sourcePlayers = current == null ? <Player>[] : await _playerRepo.getAll(seasonId: current.id);
     final year = DateTime.now().year;
     final season = Season(
       id: _uuid.v4(),
@@ -35,12 +35,10 @@ class SeasonManager {
       year: year,
       isActive: true,
     );
+
     await _seasonRepo.save(season);
     await _settingsRepo.setActiveSeason(season.id);
-
-    for (final p in sourcePlayers) {
-      await _playerRepo.save(p.resetForSeason(seasonId: season.id, newId: _uuid.v4()));
-    }
+    await _playerRepo.ensureSeasonStatsForAllPlayers(season.id);
 
     return season;
   }
@@ -59,7 +57,8 @@ class SeasonManager {
       }
       await _champRepo.delete(champ.id);
     }
-    await _playerRepo.deleteBySeason(seasonId);
+
+    await _playerRepo.resetStatsBySeason(seasonId);
     await _seasonRepo.deleteSeason(seasonId);
 
     final remaining = await _seasonRepo.getAll();
@@ -77,16 +76,20 @@ class SeasonManager {
     final winRate = p.wins / matches;
     final titleRate = p.titles / matches;
     final finalRate = p.finals / matches;
-    return (goalRate * 5.0) + (assistRate * 2.0) + (winRate * 1.2) + (titleRate * 2.4) + (finalRate * 0.8);
+    return (goalRate * 5.0) +
+        (assistRate * 2.0) +
+        (winRate * 1.2) +
+        (titleRate * 2.4) +
+        (finalRate * 0.8);
   }
 
-  /// Salva uma temporada (p.ex. após renomear)
   Future<void> saveSeason(Season season) => _seasonRepo.save(season);
 
   Future<Season?> finishSeason(String seasonId) async {
     final season = await _seasonRepo.getById(seasonId);
     if (season == null) return null;
-    final players = await _playerRepo.getAll(seasonId: season.id);
+
+    final players = await _playerRepo.getPlayersForSeason(season.id);
     if (players.isNotEmpty) {
       final ranking = [...players]..sort((a, b) => scoreForPlayer(b).compareTo(scoreForPlayer(a)));
       final winner = ranking.first;
@@ -94,12 +97,15 @@ class SeasonManager {
       season.goldenBallPlayerName = winner.name;
       season.goldenBallScore = scoreForPlayer(winner);
     }
+
     season.isActive = false;
     season.finishedAt = DateTime.now();
     await _seasonRepo.save(season);
+
     if (seasonId == (await _settingsRepo.get()).activeSeasonId) {
       await _settingsRepo.setActiveSeason(season.id);
     }
+
     return season;
   }
 

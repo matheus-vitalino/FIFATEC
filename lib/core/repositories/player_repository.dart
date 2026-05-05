@@ -1,18 +1,41 @@
 import '../database/database_helper.dart';
 import '../models/player.dart';
+import '../models/player_season_stats.dart';
 import 'settings_repository.dart';
 
 class PlayerRepository {
   final DatabaseHelper _db = DatabaseHelper();
   final SeasonRepository _seasonRepo = SeasonRepository();
 
-  Future<List<Player>> getAll({String? seasonId, bool all = false}) async {
-    final rows = seasonId != null
-        ? await _db.getPlayersBySeason(seasonId)
-        : all
-            ? await _db.getAllPlayers()
-            : await _db.getPlayersBySeason((await _seasonRepo.ensureCurrentSeason()).id);
-    return rows.map(Player.fromMap).toList();
+  Future<List<Player>> getAll({bool all = false}) async {
+    final rows = await _db.getAllPlayers();
+    final players = rows.map(Player.fromMap).toList();
+    return players;
+  }
+
+  Future<List<Player>> getPlayersForSeason(String seasonId) async {
+    final players = await getAll();
+    final statsRows = await _db.getPlayerSeasonStatsBySeason(seasonId);
+    final statsByPlayerId = {
+      for (final row in statsRows) row['playerId'] as String: PlayerSeasonStats.fromMap(row),
+    };
+
+    return players
+        .map((p) {
+          final stats = statsByPlayerId[p.id];
+          if (stats == null) return p.copyWith();
+          return p.copyWith(
+            matchesPlayed: stats.matchesPlayed,
+            wins: stats.wins,
+            losses: stats.losses,
+            goals: stats.goals,
+            assists: stats.assists,
+            vices: stats.vices,
+            finals: stats.finals,
+            titles: stats.titles,
+          );
+        })
+        .toList();
   }
 
   Future<Player?> getById(String id) async {
@@ -21,8 +44,12 @@ class PlayerRepository {
   }
 
   Future<void> save(Player player) async {
+    await _db.insertPlayer(player.toMap());
     final season = await _seasonRepo.ensureCurrentSeason();
-    await _db.insertPlayer(player.copyWith(seasonId: player.seasonId ?? season.id).toMap());
+    final existing = await _db.getPlayerSeasonStats(season.id, player.id);
+    if (existing == null) {
+      await _db.savePlayerSeasonStats(PlayerSeasonStats(seasonId: season.id, playerId: player.id).toMap());
+    }
   }
 
   Future<void> update(Player player) async {
@@ -33,21 +60,25 @@ class PlayerRepository {
     await _db.deletePlayer(id);
   }
 
-  Future<void> deleteBySeason(String seasonId) async {
-    await _db.deletePlayersBySeason(seasonId);
+  Future<void> resetStatsBySeason(String seasonId) async {
+    await _db.deletePlayerSeasonStatsBySeason(seasonId);
   }
 
-  Future<void> updateStats(String id,
-      {int matchesDelta = 0,
-      int winsDelta = 0,
-      int lossesDelta = 0,
-      int goalsDelta = 0,
-      int assistsDelta = 0,
-      int vicesDelta = 0,
-      int finalsDelta = 0,
-      int titlesDelta = 0}) async {
+  Future<void> updateStats(
+    String id, {
+    String? seasonId,
+    int matchesDelta = 0,
+    int winsDelta = 0,
+    int lossesDelta = 0,
+    int goalsDelta = 0,
+    int assistsDelta = 0,
+    int vicesDelta = 0,
+    int finalsDelta = 0,
+    int titlesDelta = 0,
+  }) async {
     final player = await getById(id);
     if (player == null) return;
+
     final updated = player.copyWith(
       matchesPlayed: player.matchesPlayed + matchesDelta,
       wins: player.wins + winsDelta,
@@ -58,16 +89,41 @@ class PlayerRepository {
       finals: player.finals + finalsDelta,
       titles: player.titles + titlesDelta,
     );
+
     await update(updated);
+
+    final season = seasonId ?? (await _seasonRepo.ensureCurrentSeason()).id;
+    await _db.incrementPlayerSeasonStats(
+      season,
+      id,
+      matchesDelta: matchesDelta,
+      winsDelta: winsDelta,
+      lossesDelta: lossesDelta,
+      goalsDelta: goalsDelta,
+      assistsDelta: assistsDelta,
+      vicesDelta: vicesDelta,
+      finalsDelta: finalsDelta,
+      titlesDelta: titlesDelta,
+    );
   }
 
-  Future<List<Player>> clonePlayersForSeason(String seasonId, {required List<Player> sourcePlayers}) async {
-    final clones = <Player>[];
-    for (final p in sourcePlayers) {
-      final clone = p.resetForSeason(seasonId: seasonId, newId: '${p.id}_$seasonId');
-      clones.add(clone);
-      await save(clone);
+  Future<void> ensureSeasonStatsForAllPlayers(String seasonId) async {
+    final players = await getAll();
+    for (final player in players) {
+      final existing = await _db.getPlayerSeasonStats(seasonId, player.id);
+      if (existing == null) {
+        await _db.savePlayerSeasonStats(PlayerSeasonStats(seasonId: seasonId, playerId: player.id).toMap());
+      }
     }
-    return clones;
+  }
+
+  Future<List<Player>> getAllForSeason(String seasonId) => getPlayersForSeason(seasonId);
+
+  Future<List<Player>> clonePlayersForSeason(
+    String seasonId, {
+    required List<Player> sourcePlayers,
+  }) async {
+    await ensureSeasonStatsForAllPlayers(seasonId);
+    return sourcePlayers;
   }
 }

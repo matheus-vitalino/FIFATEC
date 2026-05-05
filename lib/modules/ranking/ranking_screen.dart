@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/models/app_settings.dart';
 import '../../core/models/player.dart';
+import '../../core/models/match.dart';
 import '../../core/models/season.dart';
 import '../../core/repositories/player_repository.dart';
+import '../../core/repositories/match_repository.dart';
+import '../../core/repositories/settings_repository.dart';
 import '../../core/services/season_manager.dart';
 import '../../shared/widgets/custom_app_bar.dart';
 import '../../shared/widgets/player_avatar.dart';
@@ -17,10 +21,14 @@ class RankingScreen extends StatefulWidget {
 
 class _RankingScreenState extends State<RankingScreen> with SingleTickerProviderStateMixin {
   final _playerRepo = PlayerRepository();
+  final _matchRepo = MatchRepository();
   final _seasonManager = SeasonManager.instance;
+  final _settingsRepo = SettingsRepository();
   List<Player> _players = [];
+  List<MatchModel> _matches = [];
   List<Season> _seasons = [];
   Season? _selectedSeason;
+  AppSettings _settings = AppSettings();
   bool _loading = true;
   bool _busy = false;
   late TabController _tab;
@@ -34,10 +42,17 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    _seasons = await _seasonManager.getSeasons();
-    _selectedSeason = await _seasonManager.getActiveSeason();
+    final results = await Future.wait([
+      _seasonManager.getSeasons(),
+      _seasonManager.getActiveSeason(),
+      _settingsRepo.get(),
+    ]);
+    _seasons = results[0] as List<Season>;
+    _selectedSeason = results[1] as Season?;
+    _settings = results[2] as AppSettings;
     _selectedSeason ??= _seasons.isNotEmpty ? _seasons.first : null;
-    _players = _selectedSeason == null ? [] : await _playerRepo.getAll(seasonId: _selectedSeason!.id);
+    _players = _selectedSeason == null ? [] : await _playerRepo.getPlayersForSeason(_selectedSeason!.id);
+    _matches = _selectedSeason == null ? [] : (await _matchRepo.getAll(seasonId: _selectedSeason!.id)).where((m) => m.status == MatchStatus.finished).toList();
     if (mounted) setState(() => _loading = false);
   }
 
@@ -47,16 +62,74 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
 
   List<_Duo> get _bestDuos {
     final Map<String, _Duo> duos = {};
+    final playersById = {for (final p in _players) p.id: p};
+    final useGoals = _settings.duoRankingMode == DuoRankingMode.sharedGoals;
+
+    if (useGoals) {
+      for (final match in _matches) {
+        for (final team in [match.teamA, match.teamB]) {
+          final goalsByPlayer = <String, int>{};
+          for (final goal in match.goals.where((g) => g.teamId == team.id)) {
+            goalsByPlayer[goal.playerId] = (goalsByPlayer[goal.playerId] ?? 0) + 1;
+          }
+
+          final entries = goalsByPlayer.entries.toList();
+          for (int i = 0; i < entries.length - 1; i++) {
+            for (int j = i + 1; j < entries.length; j++) {
+              final aId = entries[i].key;
+              final bId = entries[j].key;
+              final aGoals = entries[i].value;
+              final bGoals = entries[j].value;
+              final sorted = [aId, bId]..sort();
+              final a = playersById[sorted[0]];
+              final b = playersById[sorted[1]];
+              if (a == null || b == null) continue;
+
+              final key = '${sorted[0]}_${sorted[1]}';
+              final scoreDelta = aGoals * bGoals;
+              final sharedGoals = aGoals + bGoals;
+              final existing = duos[key];
+              if (existing == null) {
+                duos[key] = _Duo(a, b, scoreDelta, sharedGoals, 1);
+              } else {
+                duos[key] = existing.copyWith(
+                  scoreDelta: scoreDelta,
+                  sharedGoals: sharedGoals,
+                  sharedMatches: 1,
+                );
+              }
+            }
+          }
+        }
+      }
+
+      final list = duos.values.toList()..sort((a, b) {
+        final scoreCmp = b.score.compareTo(a.score);
+        if (scoreCmp != 0) return scoreCmp;
+        final goalsCmp = b.sharedGoals.compareTo(a.sharedGoals);
+        if (goalsCmp != 0) return goalsCmp;
+        return b.sharedMatches.compareTo(a.sharedMatches);
+      });
+      return list.where((d) => d.score > 0).take(10).toList();
+    }
+
     for (int i = 0; i < _players.length - 1; i++) {
       for (int j = i + 1; j < _players.length; j++) {
-        final key = '${_players[i].id}_${_players[j].id}';
-        // Score = títulos combinados (base) + bônus de vitórias
-        final score = (_players[i].titles + _players[j].titles) * 10
-            + _players[i].wins + _players[j].wins;
-        duos[key] = _Duo(_players[i], _players[j], score);
+        final a = _players[i];
+        final b = _players[j];
+        final score = (a.titles + b.titles) * 10 + a.wins + b.wins;
+        final key = '${a.id}_${b.id}';
+        duos[key] = _Duo(a, b, score, 0, 0);
       }
     }
-    final list = duos.values.toList()..sort((a, b) => b.score.compareTo(a.score));
+
+    final list = duos.values.toList()..sort((a, b) {
+      final scoreCmp = b.score.compareTo(a.score);
+      if (scoreCmp != 0) return scoreCmp;
+      final titlesCmp = (b.a.titles + b.b.titles).compareTo(a.a.titles + a.b.titles);
+      if (titlesCmp != 0) return titlesCmp;
+      return (b.a.wins + b.b.wins).compareTo(a.a.wins + a.b.wins);
+    });
     return list.where((d) => d.score > 0).take(10).toList();
   }
 
@@ -81,7 +154,8 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
     setState(() => _busy = true);
     await _seasonManager.switchSeason(season.id);
     _selectedSeason = season;
-    _players = await _playerRepo.getAll(seasonId: season.id);
+    _players = await _playerRepo.getPlayersForSeason(season.id);
+    _matches = (await _matchRepo.getAll(seasonId: season.id)).where((m) => m.status == MatchStatus.finished).toList();
     if (mounted) setState(() => _busy = false);
   }
 
@@ -95,7 +169,8 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
     final season = await _seasonManager.createNewSeason();
     _selectedSeason = season;
     _seasons = await _seasonManager.getSeasons();
-    _players = await _playerRepo.getAll(seasonId: season.id);
+    _players = await _playerRepo.getPlayersForSeason(season.id);
+    _matches = (await _matchRepo.getAll(seasonId: season.id)).where((m) => m.status == MatchStatus.finished).toList();
     if (mounted) setState(() => _busy = false);
   }
 
@@ -126,7 +201,8 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
     if (season != null) {
       _selectedSeason = season;
       _seasons = await _seasonManager.getSeasons();
-      _players = await _playerRepo.getAll(seasonId: season.id);
+      _players = await _playerRepo.getPlayersForSeason(season.id);
+    _matches = (await _matchRepo.getAll(seasonId: season.id)).where((m) => m.status == MatchStatus.finished).toList();
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -294,13 +370,18 @@ class _RankingScreenState extends State<RankingScreen> with SingleTickerProvider
   Widget _buildDuoRanking() {
     final duos = _bestDuos;
     if (duos.isEmpty) {
-      return const EmptyState(icon: Icons.people_rounded, title: 'Sem duplas', subtitle: 'Adicione mais jogadores');
+      return EmptyState(icon: Icons.people_rounded, title: 'Sem duplas', subtitle: _settings.duoRankingMode == DuoRankingMode.sharedGoals ? 'Adicione mais jogadores e marque gols juntos' : 'Adicione mais jogadores e registre vitórias e títulos');
     }
 
     return ListView.builder(
       padding: const EdgeInsets.all(16),
       itemCount: duos.length,
-      itemBuilder: (_, i) => _DuoCard(duo: duos[i], position: i + 1, index: i),
+      itemBuilder: (_, i) => _DuoCard(
+        duo: duos[i],
+        position: i + 1,
+        index: i,
+        mode: _settings.duoRankingMode,
+      ),
     );
   }
 
@@ -512,7 +593,20 @@ class _TrioCard extends StatelessWidget {
 class _Duo {
   final Player a, b;
   final int score;
-  const _Duo(this.a, this.b, this.score);
+  final int sharedGoals;
+  final int sharedMatches;
+
+  const _Duo(this.a, this.b, this.score, this.sharedGoals, this.sharedMatches);
+
+  _Duo copyWith({int scoreDelta = 0, int sharedGoals = 0, int sharedMatches = 0}) {
+    return _Duo(
+      a,
+      b,
+      score + scoreDelta,
+      this.sharedGoals + sharedGoals,
+      this.sharedMatches + sharedMatches,
+    );
+  }
 }
 
 class _RankCard extends StatelessWidget {
@@ -596,8 +690,9 @@ class _RankCard extends StatelessWidget {
 class _DuoCard extends StatelessWidget {
   final _Duo duo;
   final int position, index;
+  final DuoRankingMode mode;
 
-  const _DuoCard({required this.duo, required this.position, required this.index});
+  const _DuoCard({required this.duo, required this.position, required this.index, required this.mode});
 
   @override
   Widget build(BuildContext context) {
@@ -653,7 +748,9 @@ class _DuoCard extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
-                  '${duo.a.titles + duo.b.titles} títulos combinados',
+                  mode == DuoRankingMode.sharedGoals
+                      ? '${duo.sharedGoals} gols juntos em ${duo.sharedMatches} partida(s)'
+                      : '${duo.a.titles + duo.b.titles} títulos • ${duo.a.wins + duo.b.wins} vitórias',
                   style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
                 ),
               ],
