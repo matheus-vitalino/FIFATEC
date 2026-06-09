@@ -48,6 +48,40 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
     setState(() => _loading = false);
   }
 
+  Future<void> _renameChampionship() async {
+    if (_champ == null) return;
+    final controller = TextEditingController(text: _champ!.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: AppColors.card,
+        title: const Text('Renomear campeonato', style: TextStyle(color: AppColors.textPrimary)),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          style: const TextStyle(color: AppColors.textPrimary),
+          decoration: const InputDecoration(
+            hintText: 'Novo nome',
+          ),
+          textCapitalization: TextCapitalization.words,
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancelar')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
+            child: const Text('Salvar'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newName == null || newName.isEmpty || newName == _champ!.name) return;
+    _champ!.name = newName;
+    await _champRepo.save(_champ!);
+    if (mounted) setState(() {});
+  }
+
   // ── Nova partida ─────────────────────────────────────────────
   Future<void> _addMatch() async {
     if (_champ == null || _champ!.teams.length < 2) return;
@@ -348,6 +382,12 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
           // Foto dos vencedores
           if (_champ != null)
             IconButton(
+              icon: const Icon(Icons.edit_rounded, color: AppColors.textPrimary),
+              onPressed: _renameChampionship,
+              tooltip: 'Renomear campeonato',
+            ),
+          if (_champ != null)
+            IconButton(
               icon: const Icon(Icons.photo_camera_rounded, color: AppColors.accent),
               onPressed: _pickWinnerPhoto,
               tooltip: 'Foto dos vencedores',
@@ -384,7 +424,7 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
                 Expanded(
                   child: TabBarView(
                     controller: _tab,
-                    children: [_buildMatches(), _buildTeams()],
+                    children: [_buildMatches(context), _buildTeams(context)],
                   ),
                 ),
               ],
@@ -479,7 +519,7 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
     ],
   );
 
-  Widget _buildMatches() {
+  Widget _buildMatches(BuildContext context) {
     if (_matches.isEmpty) {
       return EmptyState(
         icon: Icons.sports_soccer_outlined,
@@ -491,7 +531,8 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
+
       itemCount: _matches.length,
       itemBuilder: (_, i) {
         final m = _matches[i];
@@ -505,10 +546,11 @@ class _ChampionshipDetailScreenState extends State<ChampionshipDetailScreen>
     );
   }
 
-  Widget _buildTeams() {
+  Widget _buildTeams(BuildContext context) {
     if (_champ == null) return const SizedBox();
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
+
       itemCount: _champ!.teams.length,
       itemBuilder: (_, i) {
         final t = _champ!.teams[i];

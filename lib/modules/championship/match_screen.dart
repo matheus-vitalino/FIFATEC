@@ -1,15 +1,16 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../core/services/match_background_service.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/models/match.dart';
 import '../../core/models/player.dart';
-import '../../core/models/team.dart' show Team, TeamPlayer;
 import '../../core/models/team.dart';
 import '../../core/repositories/championship_repository.dart';
 import '../../core/repositories/match_repository.dart';
 import '../../core/repositories/player_repository.dart';
 import '../../core/repositories/settings_repository.dart';
-import '../../core/services/audio_service.dart';
 import '../../core/utils/date_utils.dart';
 import '../../shared/widgets/custom_app_bar.dart';
 
@@ -28,121 +29,509 @@ class _MatchScreenState extends State<MatchScreen> {
   final _champRepo = ChampionshipRepository();
   final _playerRepo = PlayerRepository();
   final _settingsRepo = SettingsRepository();
-  final _seasonRepo = SeasonRepository();
 
   MatchModel? _match;
   bool _loading = true;
   bool _saving = false;
 
-  // Timer
-  Timer? _timer;
-  Timer? _delayTimer;
+  StreamSubscription? _timerUpdateSub;
+  StreamSubscription? _delayTickSub;
+  StreamSubscription? _timerFinishedSub;
+  Timer? _uiTicker;
+
+  DateTime? _delayStartedAt;
+
   int _elapsed = 0;
+  int _runningBaseElapsed = 0;
+  DateTime? _runningSince;
   int _duration = 300;
   bool _running = false;
 
-  // Delay: exibe 3, 2, 1 e SÓ ENTÃO começa
   bool _delayActive = false;
-  int _delayRemaining = 3; // começa em 3
+  int _delayRemaining = 3;
   int _startDelay = 3;
 
   int _goalLimit = 2;
   bool _showGoalTime = true;
+  int _lastTimerRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    _bindBackgroundEvents();
     _load();
+  }
+
+  void _bindBackgroundEvents() {
+    final service = FlutterBackgroundService();
+
+    _timerUpdateSub = service.on('timer_update').listen((event) async {
+      if (!mounted || _match == null) return;
+
+      final data = Map<String, dynamic>.from(event ?? {});
+      if (data['matchId'] != _match!.id) return;
+
+      final revision = (data['revision'] as int?) ?? _lastTimerRevision;
+      if (revision < _lastTimerRevision) return;
+      _lastTimerRevision = revision;
+
+      final elapsed = (data['elapsedSeconds'] as int?) ?? _elapsed;
+      final running = data['running'] as bool? ?? false;
+      final reset = data['reset'] as bool? ?? false;
+      final baseElapsed = (data['baseElapsedSeconds'] as int?) ?? elapsed;
+      final startedAtMillis = data['startedAtMillis'] as int?;
+      final serviceStartedAt = startedAtMillis == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(startedAtMillis);
+
+      final serviceElapsed = elapsed.clamp(0, _duration).toInt();
+      final serviceBaseElapsed = baseElapsed.clamp(0, _duration).toInt();
+
+      if (reset) {
+        _stopUiTicker();
+        setState(() {
+          _delayActive = false;
+          _delayStartedAt = null;
+          _running = false;
+          _runningSince = null;
+          _runningBaseElapsed = 0;
+          _elapsed = 0;
+          _delayRemaining = _startDelay;
+        });
+      } else if (running) {
+        // Fonte única: o serviço manda o mesmo segundo oficial usado na notificação.
+        // A tela apenas mostra esse valor, sem recalcular por conta própria.
+        _stopUiTicker();
+        setState(() {
+          _elapsed = serviceElapsed;
+          _running = true;
+          _delayActive = false;
+          _delayStartedAt = null;
+          _delayRemaining = _startDelay;
+          _runningBaseElapsed = serviceBaseElapsed;
+          _runningSince = serviceStartedAt;
+        });
+      } else {
+        _stopUiTicker();
+        setState(() {
+          _elapsed = serviceElapsed.clamp(0, _duration).toInt();
+          _running = false;
+          _delayActive = false;
+          _delayStartedAt = null;
+          _runningSince = null;
+          _runningBaseElapsed = _elapsed;
+        });
+      }
+
+      _match!.timerElapsedSeconds = _elapsed;
+      _match!.timerRunning = running;
+      _match!.timerStartedAt = running ? _runningSince : null;
+    });
+
+    _delayTickSub = service.on('timer_delay_tick').listen((event) {
+      if (!mounted || _match == null) return;
+
+      final data = Map<String, dynamic>.from(event ?? {});
+      if (data['matchId'] != _match!.id) return;
+
+      final remaining = (data['remainingSeconds'] as int?) ?? 0;
+      setState(() {
+        _delayRemaining = remaining.clamp(0, _startDelay).toInt();
+        _delayActive = _delayRemaining > 0;
+
+        if (_delayActive && _delayStartedAt == null) {
+          _delayStartedAt = DateTime.now();
+        }
+
+        if (_delayRemaining == 0) {
+          _delayActive = false;
+          _delayStartedAt = null;
+          _running = true;
+          if (_runningSince == null) {
+            _runningSince = DateTime.now();
+            _runningBaseElapsed = _elapsed;
+          }
+        }
+      });
+
+      _startUiTicker();
+    });
+
+    _timerFinishedSub = service.on('timer_finished').listen((event) {
+      if (!mounted || _match == null) return;
+
+      final data = Map<String, dynamic>.from(event ?? {});
+      if (data['matchId'] != _match!.id) return;
+
+      _stopUiTicker();
+      setState(() {
+        _running = false;
+        _delayActive = false;
+        _delayStartedAt = null;
+        _runningSince = null;
+        _runningBaseElapsed = _duration;
+        _elapsed = _duration;
+      });
+
+      _match!.timerRunning = false;
+      _match!.timerElapsedSeconds = _duration;
+      _match!.timerStartedAt = null;
+      _matchRepo.save(_match!);
+
+      if (mounted) {
+        _showTimeUpDialog();
+      }
+    });
+  }
+
+  int _calculateLocalElapsed() {
+    // O tempo exibido vem do serviço em segundo plano, que também atualiza a notificação.
+    // Por isso, ações como pausar, +10s e -10s usam exatamente o valor que está na tela.
+    return _elapsed.clamp(0, _duration).toInt();
+  }
+
+  int _calculateLocalDelayRemaining() {
+    if (!_delayActive) return 0;
+
+    final started = _delayStartedAt;
+    if (started == null) return _delayRemaining.clamp(0, _startDelay).toInt();
+
+    final passedSeconds = DateTime.now().difference(started).inMilliseconds ~/ 1000;
+    return (_startDelay - passedSeconds).clamp(0, _startDelay).toInt();
+  }
+
+  void _startUiTicker() {
+    if (_uiTicker?.isActive == true) return;
+
+    _uiTicker = Timer.periodic(const Duration(milliseconds: 200), (_) {
+      if (!mounted || _match == null) return;
+
+      if (_delayActive) {
+        final nextRemaining = _calculateLocalDelayRemaining();
+
+        if (nextRemaining != _delayRemaining) {
+          setState(() {
+            _delayRemaining = nextRemaining;
+            if (_delayRemaining == 0) {
+              _delayActive = false;
+              _delayStartedAt = null;
+              _running = true;
+              _runningSince = DateTime.now();
+              _runningBaseElapsed = _elapsed;
+            }
+          });
+        }
+        return;
+      }
+
+      // Quando a partida está rodando, quem atualiza o tempo da tela é o serviço.
+      // Assim o cronômetro do app e o da notificação exibem exatamente o mesmo valor.
+    });
+  }
+
+  void _stopUiTicker() {
+    _uiTicker?.cancel();
+    _uiTicker = null;
   }
 
   Future<void> _load() async {
     setState(() => _loading = true);
-    _match = await _matchRepo.getById(widget.matchId);
-    final settings = await _settingsRepo.get();
-    _duration = settings.matchDurationSeconds;
-    _startDelay = settings.startDelaySeconds;
-    _goalLimit = settings.goalLimit;
-    _showGoalTime = settings.showGoalTime;
-    if (_match != null) {
-      _duration = _match!.durationSeconds;
-      _showGoalTime = _match!.showGoalTime;
+    try {
+      _match = await _matchRepo.getById(widget.matchId);
+      final settings = await _settingsRepo.get();
+      _duration = settings.matchDurationSeconds;
+      _startDelay = settings.startDelaySeconds;
+      _goalLimit = settings.goalLimit;
+      _showGoalTime = settings.showGoalTime;
+
+      if (_match != null) {
+        _duration = _match!.durationSeconds;
+        _showGoalTime = _match!.showGoalTime;
+
+        if (_match!.timerRunning && _match!.timerStartedAt != null) {
+          final currentElapsed = (_match!.timerElapsedSeconds +
+                  DateTime.now().difference(_match!.timerStartedAt!).inSeconds)
+              .clamp(0, _duration)
+              .toInt();
+
+          _elapsed = currentElapsed;
+          _running = true;
+          _runningSince = _match!.timerStartedAt;
+          _runningBaseElapsed = _match!.timerElapsedSeconds;
+
+          try {
+            await MatchBackgroundService.resumeTimer(
+              matchId: _match!.id,
+              durationSeconds: _duration,
+              elapsedSeconds: currentElapsed,
+              showGoalTime: _showGoalTime,
+            );
+          } catch (_) {
+            _running = false;
+            _stopUiTicker();
+            _match!.timerRunning = false;
+            _match!.timerStartedAt = null;
+            await _matchRepo.save(_match!);
+          }
+        } else {
+          _elapsed = _match!.timerElapsedSeconds.clamp(0, _duration).toInt();
+          _running = _match!.timerRunning;
+          if (_running) {
+            _runningSince = _match!.timerStartedAt;
+            _runningBaseElapsed = _match!.timerElapsedSeconds;
+          }
+        }
+      }
+
+      if (_match != null &&
+          !_match!.timerRunning &&
+          _elapsed >= _duration &&
+          _match!.status == MatchStatus.inProgress) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _showTimeUpDialog();
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
     }
-    setState(() => _loading = false);
   }
 
   // ── Cronômetro ────────────────────────────────────────────────
 
-  void _startTimer() {
-    if (_delayActive || _running) return;
-    _updateMatchStatus(MatchStatus.inProgress);
+  Future<void> _startTimer() async {
+    if (_delayActive || _running || _match == null) return;
 
-    if (_startDelay > 0) {
-      // Inicia o delay: mostra _startDelay, _startDelay-1, ..., 1 e depois começa
-      setState(() {
-        _delayActive = true;
-        _delayRemaining = _startDelay; // Ex: começa em 3
-      });
-      _delayTimer = Timer.periodic(const Duration(seconds: 1), (t) {
-        if (!mounted) { t.cancel(); return; }
-        setState(() {
-          _delayRemaining--; // 3 → 2 → 1 → 0 (quando chega a 0, para)
-          if (_delayRemaining <= 0) {
-            _delayActive = false;
-            t.cancel();
-            AudioService.playWhistle();
-            _beginCounting();
-          }
-        });
-      });
-    } else {
-      _beginCounting();
-    }
-  }
-
-  void _beginCounting() {
-    setState(() => _running = true);
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() {
-        _elapsed++;
-        if (_elapsed >= _duration) {
-          AudioService.playWhistle();
-          _stopTimer();
-          _showTimeUpDialog();
+    final permission = await Permission.notification.status;
+    if (!permission.isGranted) {
+      final requested = await Permission.notification.request();
+      if (!requested.isGranted) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Permita as notificações para iniciar o cronômetro em segundo plano.'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
         }
-      });
+        return;
+      }
+    }
+
+    await _updateMatchStatus(MatchStatus.inProgress);
+
+    final hasDelay = _startDelay > 0;
+    setState(() {
+      _delayActive = hasDelay;
+      _delayRemaining = _startDelay;
+      _delayStartedAt = hasDelay ? DateTime.now() : null;
+      _running = !hasDelay;
+      // Não define _runningSince aqui: o primeiro timer_update do serviço
+      // enviará o startedAtMillis exato e o listener sincronizará a âncora.
+      // Isso evita drift entre app e notificação causado pelo delay de inicialização.
+      _runningSince = null;
+      _runningBaseElapsed = _elapsed;
     });
-  }
 
-  void _stopTimer() {
-    _timer?.cancel();
-    _delayTimer?.cancel();
-    _running = false;
-    _delayActive = false;
-  }
+    try {
+      await MatchBackgroundService.startTimer(
+        matchId: _match!.id,
+        durationSeconds: _duration,
+        elapsedSeconds: _elapsed,
+        startDelaySeconds: _startDelay,
+        showGoalTime: _showGoalTime,
+      );
 
-  void _togglePause() {
-    if (_running) {
-      _stopTimer();
-      setState(() {});
-    } else if (_elapsed < _duration) {
-      _beginCounting();
+      if (_startDelay == 0 && mounted) {
+        setState(() => _running = true);
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      _stopUiTicker();
+      setState(() {
+        _delayActive = false;
+        _running = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha ao iniciar o cronômetro: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
     }
   }
 
-  // +10s adiciona tempo RESTANTE → reduz _elapsed
-  // -10s remove tempo restante → aumenta _elapsed
-  void _addTime() => setState(() {
-        _elapsed = (_elapsed - 10).clamp(0, _duration);
+  Future<void> _pauseTimer() async {
+    if (_match == null) return;
+    try {
+      final currentElapsed = _calculateLocalElapsed();
+      _stopUiTicker();
+      setState(() {
+        _elapsed = currentElapsed;
+        _running = false;
+        _delayActive = false;
+        _delayStartedAt = null;
       });
+      _match!.timerRunning = false;
+      _match!.timerElapsedSeconds = _elapsed.clamp(0, _duration).toInt();
+      _match!.timerStartedAt = null;
+      await _matchRepo.save(_match!);
+      await MatchBackgroundService.pauseTimer(
+        matchId: _match!.id,
+        durationSeconds: _duration,
+        elapsedSeconds: _elapsed,
+        showGoalTime: _showGoalTime,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha ao pausar o cronômetro: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
 
-  void _removeTime() => setState(() {
-        _elapsed = (_elapsed + 10).clamp(0, _duration + 600);
+  Future<void> _togglePause() async {
+    if (_running) {
+      await _pauseTimer();
+    } else if (_elapsed < _duration && _match != null) {
+      final permission = await Permission.notification.status;
+      if (!permission.isGranted) {
+        final requested = await Permission.notification.request();
+        if (!requested.isGranted) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Permita as notificações para retomar o cronômetro em segundo plano.'),
+                backgroundColor: Colors.redAccent,
+              ),
+            );
+          }
+          return;
+        }
+      }
+
+      _match!.timerRunning = true;
+      _match!.timerElapsedSeconds = _elapsed;
+      _match!.timerStartedAt = null; // será atualizado pelo timer_update do serviço
+      // Não define _runningSince aqui: o primeiro timer_update do serviço
+      // enviará o startedAtMillis exato e sincronizará a âncora local.
+      _runningSince = null;
+      _runningBaseElapsed = _elapsed;
+      await _matchRepo.save(_match!);
+
+      try {
+        await MatchBackgroundService.resumeTimer(
+          matchId: _match!.id,
+          durationSeconds: _duration,
+          elapsedSeconds: _elapsed,
+          showGoalTime: _showGoalTime,
+        );
+        if (mounted) {
+          setState(() {
+            _running = true;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Falha ao retomar o cronômetro: $e'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _setElapsed(int value) async {
+    final wasRunning = _running;
+    final newElapsed = value.clamp(0, _duration + 600).toInt();
+    final now = DateTime.now();
+
+    setState(() {
+      _elapsed = newElapsed;
+      _delayActive = false;
+      _delayStartedAt = null;
+      _runningBaseElapsed = newElapsed;
+      _runningSince = wasRunning ? now : null;
+      _running = wasRunning;
+    });
+
+    if (_match == null) return;
+
+    try {
+      _match!.timerElapsedSeconds = newElapsed;
+      _match!.timerRunning = wasRunning;
+      _match!.timerStartedAt = wasRunning ? now : null;
+      await _matchRepo.save(_match!);
+
+      final serviceIsRunning = await MatchBackgroundService.isRunning();
+      if (serviceIsRunning || wasRunning) {
+        await MatchBackgroundService.adjustTimer(
+          matchId: _match!.id,
+          durationSeconds: _duration,
+          elapsedSeconds: newElapsed,
+          showGoalTime: _showGoalTime,
+          running: wasRunning,
+        );
+      }
+
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha ao atualizar o tempo: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  Future<void> _addTime() async {
+    await _setElapsed(_calculateLocalElapsed() - 10);
+  }
+
+  Future<void> _removeTime() async {
+    await _setElapsed(_calculateLocalElapsed() + 10);
+  }
+
+  Future<void> _resetTimer() async {
+    if (_match == null) return;
+    try {
+      _stopUiTicker();
+      setState(() {
+        _elapsed = 0;
+        _delayActive = false;
+        _delayStartedAt = null;
+        _delayRemaining = _startDelay;
+        _running = false;
+        _runningSince = null;
+        _runningBaseElapsed = 0;
       });
-
-  void _resetTimer() {
-    _stopTimer();
-    setState(() { _elapsed = 0; _delayActive = false; _delayRemaining = _startDelay; });
+      _match!.timerRunning = false;
+      _match!.timerElapsedSeconds = 0;
+      _match!.timerStartedAt = null;
+      await _matchRepo.save(_match!);
+      await MatchBackgroundService.resetTimer(
+        matchId: _match!.id,
+        durationSeconds: _duration,
+        showGoalTime: _showGoalTime,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Falha ao resetar o cronômetro: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
   }
 
   Future<void> _updateMatchStatus(MatchStatus status) async {
@@ -174,6 +563,27 @@ class _MatchScreenState extends State<MatchScreen> {
 
   // ── Gols ──────────────────────────────────────────────────────
 
+  Future<void> _registerOwnGoal(Team benefitingTeam, TeamPlayer player) async {
+    // Gol contra: quem faz é o jogador selecionado, mas o ponto vai para o time adversário dele.
+    if (_match == null) return;
+    final goal = GoalEvent(
+      playerId: player.playerId,
+      playerName: player.playerName,
+      teamId: benefitingTeam.id,
+      timeSeconds: _elapsed,
+      isOwnGoal: true,
+    );
+    setState(() => _match!.goals.add(goal));
+    await _matchRepo.save(_match!);
+
+    final aScore = _match!.teamAScore;
+    final bScore = _match!.teamBScore;
+    if (aScore >= _goalLimit || bScore >= _goalLimit) {
+      await _pauseTimer();
+      _showGoalLimitDialog();
+    }
+  }
+
   Future<void> _registerGoal(Team team, TeamPlayer player) async {
     if (_match == null) return;
     final goal = GoalEvent(
@@ -188,7 +598,7 @@ class _MatchScreenState extends State<MatchScreen> {
     final aScore = _match!.teamAScore;
     final bScore = _match!.teamBScore;
     if (aScore >= _goalLimit || bScore >= _goalLimit) {
-      _stopTimer();
+      await _pauseTimer();
       _showGoalLimitDialog();
     }
   }
@@ -241,29 +651,63 @@ class _MatchScreenState extends State<MatchScreen> {
   }
 
   void _showGoalPicker(Team team) {
+    if (_match == null) return;
     final players = team.activePlayers;
+    final opponent = team.id == _match!.teamA.id ? _match!.teamB : _match!.teamA;
+    final opponentPlayers = opponent.activePlayers;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 12),
-          Text('Gol de ${team.name}', style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 8),
-          ...players.map((p) => ListTile(
-                leading: const Icon(Icons.sports_soccer, color: AppColors.goal),
-                title: Text(p.playerName, style: const TextStyle(color: AppColors.textPrimary)),
-                onTap: () { Navigator.pop(context); _registerGoal(team, p); },
-              )),
-          ListTile(
-            leading: const Icon(Icons.add_circle_outline, color: AppColors.textHint),
-            title: const Text('Gol sem jogador', style: TextStyle(color: AppColors.textSecondary)),
-            onTap: () { Navigator.pop(context); _registerGoal(team, TeamPlayer(playerId: 'unknown', playerName: '?')); },
+      builder: (_) => SafeArea(
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(height: 12),
+                Text('Gol para ${team.name}', style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+                const SizedBox(height: 8),
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Gol normal', style: TextStyle(color: AppColors.textSecondary, fontWeight: FontWeight.bold, fontSize: 12)),
+                  ),
+                ),
+                ...players.map((p) => ListTile(
+                      leading: const Icon(Icons.sports_soccer, color: AppColors.goal),
+                      title: Text(p.playerName, style: const TextStyle(color: AppColors.textPrimary)),
+                      onTap: () { Navigator.pop(context); _registerGoal(team, p); },
+                    )),
+                ListTile(
+                  leading: const Icon(Icons.add_circle_outline, color: AppColors.textHint),
+                  title: const Text('Gol sem jogador', style: TextStyle(color: AppColors.textSecondary)),
+                  onTap: () { Navigator.pop(context); _registerGoal(team, TeamPlayer(playerId: 'unknown', playerName: '?')); },
+                ),
+                if (opponentPlayers.isNotEmpty) ...[
+                  const Divider(color: AppColors.surfaceLight, height: 14),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Gol contra de ${opponent.name}', style: const TextStyle(color: AppColors.loss, fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
+                  ),
+                  ...opponentPlayers.map((p) => ListTile(
+                        leading: const Icon(Icons.warning_rounded, color: AppColors.loss),
+                        title: Text(p.playerName, style: const TextStyle(color: AppColors.textPrimary)),
+                        subtitle: Text('Ponto para ${team.name}', style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+                        onTap: () { Navigator.pop(context); _registerOwnGoal(team, p); },
+                      )),
+                ],
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-        ],
+        ),
       ),
     );
   }
@@ -432,7 +876,10 @@ class _MatchScreenState extends State<MatchScreen> {
     }
 
     setState(() => _saving = true);
-    _stopTimer();
+    await MatchBackgroundService.stopService();
+    _match!.timerRunning = false;
+    _match!.timerStartedAt = null;
+    _match!.timerElapsedSeconds = _elapsed.clamp(0, _duration).toInt();
     _match!.status = MatchStatus.finished;
     _match!.winnerId = winnerId;
     _match!.isDraw = isDraw;
@@ -452,14 +899,12 @@ class _MatchScreenState extends State<MatchScreen> {
     if (_match == null) return;
     final isFinal = _match!.matchType == MatchType.final_;
     final isSemifinal = _match!.matchType == MatchType.semifinal;
-
-    final seasonId = _match!.seasonId ?? (await _seasonRepo.ensureCurrentSeason()).id;
+    final seasonId = _match!.seasonId ?? widget.championshipId;
 
     for (final team in [_match!.teamA, _match!.teamB]) {
       final isWinner = team.id == winnerId;
       final isLoser = !isDraw && !isWinner;
 
-      // Coleta jogadores ativos + substitutos que entraram
       final playerIds = <String>{};
       for (final tp in team.activePlayers) playerIds.add(tp.playerId);
       for (final sub in _match!.substitutions.where((s) => s.teamId == team.id)) {
@@ -467,23 +912,26 @@ class _MatchScreenState extends State<MatchScreen> {
       }
 
       for (final pid in playerIds) {
-        await _playerRepo.updateStats(pid,
+        await _playerRepo.updateStats(
+          pid,
           seasonId: seasonId,
           matchesDelta: 1,
           winsDelta: isWinner ? 1 : 0,
           lossesDelta: isLoser ? 1 : 0,
-          // Na final: vencedor = título, perdedor = vice
           titlesDelta: (isFinal && isWinner) ? 1 : 0,
           vicesDelta: (isFinal && isLoser) ? 1 : 0,
-          // Semifinal e final contam como "final" nas estatísticas
           finalsDelta: (isFinal || isSemifinal) ? 1 : 0,
         );
       }
     }
     for (final goal in _match!.goals) {
-      if (goal.playerId != 'unknown') {
-        await _playerRepo.updateStats(goal.playerId, seasonId: seasonId, goalsDelta: 1);
-      }
+      if (goal.playerId == 'unknown') continue;
+      await _playerRepo.updateStats(
+        goal.playerId,
+        seasonId: seasonId,
+        goalsDelta: goal.isOwnGoal ? 0 : 1,
+        ownGoalsDelta: goal.isOwnGoal ? 1 : 0,
+      );
     }
   }
 
@@ -651,9 +1099,14 @@ class _MatchScreenState extends State<MatchScreen> {
     );
   }
 
-  Widget _timerBtn(String label, VoidCallback onTap, {Color color = AppColors.textSecondary}) {
+  Widget _timerBtn(String label, FutureOr<void> Function() onTap, {Color color = AppColors.textSecondary}) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: () {
+        final result = onTap();
+        if (result is Future<void>) {
+          unawaited(result);
+        }
+      },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
@@ -801,6 +1254,7 @@ class _MatchScreenState extends State<MatchScreen> {
           const SectionHeader(title: 'Gols'),
           ...m.goals.map((goal) {
             final isTeamA = goal.teamId == m.teamA.id;
+            final teamName = isTeamA ? m.teamA.name : m.teamB.name;
             return Container(
               margin: const EdgeInsets.only(bottom: 6),
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -810,16 +1264,26 @@ class _MatchScreenState extends State<MatchScreen> {
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.sports_soccer, color: AppColors.goal, size: 16),
+                  Icon(
+                    goal.isOwnGoal ? Icons.warning_rounded : Icons.sports_soccer,
+                    color: goal.isOwnGoal ? AppColors.loss : AppColors.goal,
+                    size: 16,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(goal.playerName == '?' ? 'Gol sem jogador' : goal.playerName,
-                            style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600, fontSize: 13)),
-                        Text(isTeamA ? m.teamA.name : m.teamB.name,
-                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                        Text(
+                          goal.isOwnGoal
+                              ? 'Gol contra: ${goal.playerName}'
+                              : (goal.playerName == '?' ? 'Gol sem jogador' : goal.playerName),
+                          style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600, fontSize: 13),
+                        ),
+                        Text(
+                          goal.isOwnGoal ? 'Ponto para $teamName' : teamName,
+                          style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+                        ),
                       ],
                     ),
                   ),
@@ -887,8 +1351,10 @@ class _MatchScreenState extends State<MatchScreen> {
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _delayTimer?.cancel();
+    _stopUiTicker();
+    _timerUpdateSub?.cancel();
+    _delayTickSub?.cancel();
+    _timerFinishedSub?.cancel();
     super.dispose();
   }
 }

@@ -44,6 +44,7 @@ class GoalEvent {
   final String teamId;
   final int timeSeconds;
   final DateTime timestamp;
+  final bool isOwnGoal; // gol contra: creditado ao time adversário
 
   GoalEvent({
     required this.playerId,
@@ -51,6 +52,7 @@ class GoalEvent {
     required this.teamId,
     required this.timeSeconds,
     DateTime? timestamp,
+    this.isOwnGoal = false,
   }) : timestamp = timestamp ?? DateTime.now();
 
   Map<String, dynamic> toMap() => {
@@ -59,6 +61,7 @@ class GoalEvent {
         'teamId': teamId,
         'timeSeconds': timeSeconds,
         'timestamp': timestamp.toIso8601String(),
+        'isOwnGoal': isOwnGoal ? 1 : 0,
       };
 
   factory GoalEvent.fromMap(Map<String, dynamic> map) => GoalEvent(
@@ -67,6 +70,7 @@ class GoalEvent {
         teamId: (map['teamId'] as String?) ?? '',
         timeSeconds: (map['timeSeconds'] as int?) ?? 0,
         timestamp: DateTime.tryParse((map['timestamp'] as String?) ?? '') ?? DateTime.now(),
+        isOwnGoal: (map['isOwnGoal'] as int? ?? 0) == 1,
       );
 }
 
@@ -90,6 +94,9 @@ class MatchModel {
   String? round;
   int durationSeconds;
   bool showGoalTime;
+  int timerElapsedSeconds;
+  DateTime? timerStartedAt;
+  bool timerRunning;
 
   MatchModel({
     required this.id,
@@ -109,6 +116,9 @@ class MatchModel {
     this.round,
     this.durationSeconds = 300,
     this.showGoalTime = true,
+    this.timerElapsedSeconds = 0,
+    this.timerStartedAt,
+    this.timerRunning = false,
   })  : goals = goals ?? [],
         substitutions = substitutions ?? [],
         date = date ?? DateTime.now();
@@ -135,6 +145,9 @@ class MatchModel {
         'round': round,
         'durationSeconds': durationSeconds,
         'showGoalTime': showGoalTime ? 1 : 0,
+        'timerElapsedSeconds': timerElapsedSeconds,
+        'timerStartedAt': timerStartedAt?.toIso8601String(),
+        'timerRunning': timerRunning ? 1 : 0,
       };
 
   factory MatchModel.fromMap(Map<String, dynamic> map) {
@@ -157,6 +170,9 @@ class MatchModel {
       round: map['round'] as String?,
       durationSeconds: (map['durationSeconds'] as int?) ?? 300,
       showGoalTime: (map['showGoalTime'] as int? ?? 1) == 1,
+      timerElapsedSeconds: (map['timerElapsedSeconds'] as int?) ?? 0,
+      timerStartedAt: DateTime.tryParse((map['timerStartedAt'] as String?) ?? ''),
+      timerRunning: (map['timerRunning'] as int? ?? 0) == 1,
     );
   }
 }

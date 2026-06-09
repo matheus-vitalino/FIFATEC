@@ -65,7 +65,11 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
 
     Navigator.of(context).push(MaterialPageRoute(
       fullscreenDialog: true,
-      builder: (_) => _FullScreenPhoto(photoPath: path, playerName: _player!.name),
+      builder: (_) => _FullScreenPhoto(
+        photoPath: path,
+        playerName: _player!.name,
+        heroTag: 'player_photo_${_player!.id}',
+      ),
     ));
   }
 
@@ -108,9 +112,12 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
     final p = _player!;
     final hasPhoto = p.photoPath != null && File(p.photoPath!).existsSync();
 
-    return SingleChildScrollView(
-      child: Column(
-        children: [
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 28),
+        child: Column(
+          children: [
           // ── Header com foto grande ──────────────────────────
           Container(
             width: double.infinity,
@@ -237,6 +244,8 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
                         icon: Icons.thumb_down_rounded, color: AppColors.loss),
                     StatCard(label: 'Gols', value: '${p.goals}',
                         icon: Icons.sports_soccer, color: AppColors.goal),
+                    StatCard(label: 'Gols contra', value: '${p.ownGoals}',
+                        icon: Icons.warning_rounded, color: AppColors.loss),
                     StatCard(label: 'Títulos', value: '${p.titles}',
                         icon: Icons.emoji_events_rounded, color: AppColors.accent),
                     StatCard(label: 'Finais', value: '${p.finals}',
@@ -270,7 +279,8 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
               ],
             ),
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -284,8 +294,13 @@ class _PlayerProfileScreenState extends State<PlayerProfileScreen> {
 class _FullScreenPhoto extends StatelessWidget {
   final String photoPath;
   final String playerName;
+  final String heroTag;
 
-  const _FullScreenPhoto({required this.photoPath, required this.playerName});
+  const _FullScreenPhoto({
+    required this.photoPath,
+    required this.playerName,
+    required this.heroTag,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -298,7 +313,7 @@ class _FullScreenPhoto extends StatelessWidget {
       ),
       body: Center(
         child: Hero(
-          tag: 'player_photo_full_$photoPath',
+          tag: heroTag,
           child: InteractiveViewer(
             minScale: 0.8,
             maxScale: 5.0,

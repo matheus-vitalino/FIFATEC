@@ -94,7 +94,7 @@ class _ChampionshipScreenState extends State<ChampionshipScreen>
       onRefresh: _load,
       color: AppColors.accent,
       child: ListView.builder(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
         itemCount: list.length,
         itemBuilder: (_, i) => _ChampCard(
           championship: list[i],

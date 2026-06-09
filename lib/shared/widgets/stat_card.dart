@@ -22,16 +22,16 @@ class StatCard extends StatelessWidget {
     final c = color ?? AppColors.primary;
     return Container(
       width: width,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       decoration: BoxDecoration(
         color: AppColors.card,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: c.withOpacity(0.3), width: 1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: c.withOpacity(0.2), width: 1),
         boxShadow: [
           BoxShadow(
-            color: c.withOpacity(0.15),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
+            color: c.withOpacity(0.08),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
@@ -39,31 +39,34 @@ class StatCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 36,
-            height: 36,
+            width: 38,
+            height: 38,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: c.withOpacity(0.15),
+              color: c.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: c.withOpacity(0.2), width: 1),
             ),
             child: Icon(icon, color: c, size: 18),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           Text(
             value,
             style: TextStyle(
               color: c,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
+              fontSize: 24,
+              fontWeight: FontWeight.w800,
+              height: 1,
             ),
           ),
-          const SizedBox(height: 2),
+          const SizedBox(height: 4),
           Text(
             label,
             textAlign: TextAlign.center,
             style: const TextStyle(
-              color: AppColors.textSecondary,
+              color: AppColors.textHint,
               fontSize: 11,
               fontWeight: FontWeight.w500,
+              letterSpacing: 0.3,
             ),
           ),
         ],
@@ -89,20 +92,34 @@ class StatRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.symmetric(vertical: 7),
       child: Row(
         children: [
           if (icon != null) ...[
-            Icon(icon, size: 16, color: AppColors.textHint),
-            const SizedBox(width: 8),
+            Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(7),
+              ),
+              child: Icon(icon, size: 14, color: AppColors.textHint),
+            ),
+            const SizedBox(width: 10),
           ],
-          Text(label, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 13,
+            ),
+          ),
           const Spacer(),
           Text(
             value,
             style: TextStyle(
               color: valueColor ?? AppColors.textPrimary,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
               fontSize: 14,
             ),
           ),

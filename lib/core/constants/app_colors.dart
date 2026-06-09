@@ -1,51 +1,68 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  // Primárias
-  static const Color primary = Color(0xFF1B5E20);       // Verde escuro
-  static const Color primaryLight = Color(0xFF2E7D32);
-  static const Color primaryDark = Color(0xFF003300);
-  static const Color accent = Color(0xFFFFD600);         // Amarelo ouro
-  static const Color accentLight = Color(0xFFFFFF52);
+  // ─── Identidade FIFATEC: Midnight Navy + Electric Lime ─────────────────────
+  static const Color primary = Color(0xFFB8FF3A);       // Electric Lime
+  static const Color primaryLight = Color(0xFFD4FF7A);  // Lime claro (hover/shine)
+  static const Color primaryDark = Color(0xFF6FAF0E);   // Field Green
 
-  // Fundo
-  static const Color background = Color(0xFF0F1923);     // Azul quase preto
-  static const Color surface = Color(0xFF1A2634);
-  static const Color surfaceLight = Color(0xFF243447);
-  static const Color card = Color(0xFF1E2D3D);
+  static const Color accent = Color(0xFF9ADE20);        // Kick Green
+  static const Color accentLight = Color(0xFFCCF56B);   // Lime suave
+  static const Color accentDark = Color(0xFF3D6B05);    // Pitch Dark
+  static const Color accentGold = Color(0xFFFFD166);    // Mantido para troféus/ouro
 
-  // Texto
-  static const Color textPrimary = Color(0xFFFFFFFF);
-  static const Color textSecondary = Color(0xFFB0BEC5);
-  static const Color textHint = Color(0xFF607D8B);
+  // ─── Fundo ─────────────────────────────────────────────────────────────────
+  static const Color background = Color(0xFF0D1B2A);    // Midnight Navy
+  static const Color surface = Color(0xFF1A2E45);       // Deep Steel
+  static const Color surfaceLight = Color(0xFF2B4A6B);  // Atlantic
+  static const Color card = Color(0xFF162336);          // Entre Navy e Steel
+  static const Color cardElevated = Color(0xFF1E3450);  // Steel elevado
+  static const Color border = Color(0xFF2B4A6B);        // Atlantic como borda
 
-  // Status
-  static const Color win = Color(0xFF4CAF50);
-  static const Color loss = Color(0xFFE53935);
-  static const Color draw = Color(0xFFFF9800);
-  static const Color goal = Color(0xFFFFD600);
+  // ─── Texto ─────────────────────────────────────────────────────────────────
+  static const Color textPrimary = Color(0xFFFFFFFF);   // White
+  static const Color textSecondary = Color(0xFFE8F0F7); // Ice
+  static const Color textHint = Color(0xFFA3B5C8);      // Silver Mist
 
-  // Gradientes
+  // ─── Status ────────────────────────────────────────────────────────────────
+  static const Color win = Color(0xFFB8FF3A);           // Electric Lime
+  static const Color loss = Color(0xFFFF5A6A);          // Mantido
+  static const Color draw = Color(0xFFFFD166);          // Mantido
+  static const Color goal = Color(0xFFD4FF7A);          // Lime claro
+
+  // ─── Gradientes ────────────────────────────────────────────────────────────
   static const LinearGradient primaryGradient = LinearGradient(
-    colors: [Color(0xFF1B5E20), Color(0xFF2E7D32)],
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-  );
-
-  static const LinearGradient backgroundGradient = LinearGradient(
-    colors: [Color(0xFF0F1923), Color(0xFF1A2634)],
-    begin: Alignment.topCenter,
-    end: Alignment.bottomCenter,
-  );
-
-  static const LinearGradient cardGradient = LinearGradient(
-    colors: [Color(0xFF1E2D3D), Color(0xFF243447)],
+    colors: [Color(0xFFB8FF3A), Color(0xFF6FAF0E)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );
 
   static const LinearGradient accentGradient = LinearGradient(
-    colors: [Color(0xFFFFD600), Color(0xFFFF8F00)],
+    colors: [Color(0xFF9ADE20), Color(0xFF3D6B05)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient backgroundGradient = LinearGradient(
+    colors: [Color(0xFF1A2E45), Color(0xFF0D1B2A), Color(0xFF070F18)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient cardGradient = LinearGradient(
+    colors: [Color(0xFF1E3450), Color(0xFF162336)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient heroGradient = LinearGradient(
+    colors: [Color(0xFFB8FF3A), Color(0xFF3D6A94)],
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+  );
+
+  static const LinearGradient goldGradient = LinearGradient(
+    colors: [Color(0xFFFFD166), Color(0xFFF97316)],
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
   );

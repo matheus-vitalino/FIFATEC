@@ -59,7 +59,7 @@ class SeasonRepository {
 
   Future<Season> ensureCurrentSeason() async {
     final active = await getActive();
-    if (active != null && active.finishedAt == null) return active;
+    if (active != null) return active;
     final year = DateTime.now().year;
     final season = Season(
       id: 'season_${DateTime.now().millisecondsSinceEpoch}',

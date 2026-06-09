@@ -9,6 +9,8 @@ import '../../core/repositories/championship_repository.dart';
 import '../../core/repositories/match_repository.dart';
 import '../../core/repositories/player_repository.dart';
 import '../../core/repositories/settings_repository.dart';
+import '../../core/models/season.dart';
+import '../../core/services/season_manager.dart';
 import '../../core/services/team_draw_service.dart';
 import '../../shared/widgets/custom_app_bar.dart';
 import '../../shared/widgets/player_avatar.dart';
@@ -32,12 +34,19 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
   List<Player> _allPlayers = [];
   Set<String> _selectedIds = {};
   List<Team> _teams = [];
+  final List<TextEditingController> _teamNameCtrls = [];
   ChampionshipMode _mode = ChampionshipMode.bracket;
   bool _balanceTeams = false;
   int _teamSize = 3;
   bool _loading = false;
   bool _manualTeams = false; // true = montar times manualmente
   int _step = 0;
+  final List<List<String>> _localDrawHistoryTeamGroups = [];
+
+  // Temporada
+  List<Season> _seasons = [];
+  Season? _selectedSeason;
+  String? _activeSeasonId;
 
   static const _stepLabels = ['Configurar', 'Jogadores', 'Times'];
 
@@ -50,10 +59,15 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
   Future<void> _init() async {
     final settings = await _settingsRepo.get();
     final players = await _playerRepo.getAll();
+    final seasons = await SeasonManager.instance.getSeasons();
+    final active = await SeasonManager.instance.getActiveSeason();
     setState(() {
       _teamSize = settings.teamSize;
       _balanceTeams = settings.balanceTeams;
       _allPlayers = players;
+      _seasons = seasons;
+      _selectedSeason = active ?? (seasons.isNotEmpty ? seasons.first : null);
+      _activeSeasonId = active?.id;
     });
   }
 
@@ -62,22 +76,9 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
       });
 
   // ── Sorteio automático ────────────────────────────────────────
-  void _drawTeamsAuto() {
-    final selected = _allPlayers.where((p) => _selectedIds.contains(p.id)).toList();
-    selected.shuffle();
-    final teams = _buildTeamsFromList(selected);
-    if (teams == null) return;
+  Future<void> _drawTeamsAuto() async {
+    if (_loading) return;
 
-    if (_balanceTeams) _applyBalancing(teams, selected);
-
-    setState(() {
-      _teams = teams;
-      _step = 2;
-    });
-  }
-
-  // ── Montagem manual ───────────────────────────────────────────
-  void _goToManualTeams() {
     final selected = _allPlayers.where((p) => _selectedIds.contains(p.id)).toList();
     if (selected.length < _teamSize * 2) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -87,22 +88,153 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
       return;
     }
 
-    // Cria times vazios baseado na quantidade de jogadores
-    final total = selected.length;
-    final fullTeams = total ~/ _teamSize;
+    setState(() => _loading = true);
+    try {
+      final savedHistory = await _loadTeamDrawHistory();
+      final teams = _drawService.drawSmartTeams(
+        players: selected,
+        teamSize: _teamSize,
+        balanceTeams: _balanceTeams,
+        historyTeamGroups: [
+          ...savedHistory,
+          ..._localDrawHistoryTeamGroups,
+        ],
+      );
+
+      if (teams.length < 2) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Não foi possível montar pelo menos 2 times'),
+          backgroundColor: AppColors.loss,
+        ));
+        return;
+      }
+
+      _localDrawHistoryTeamGroups.addAll(_teamGroupsFromTeams(teams));
+      if (_localDrawHistoryTeamGroups.length > 80) {
+        _localDrawHistoryTeamGroups.removeRange(
+          0,
+          _localDrawHistoryTeamGroups.length - 80,
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _teams = teams;
+        _syncTeamControllers();
+        _step = 2;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Erro ao sortear times: $e'),
+        backgroundColor: AppColors.loss,
+      ));
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<List<List<String>>> _loadTeamDrawHistory() async {
+    final championships = await _champRepo.getAll(seasonId: _selectedSeason?.id);
+    final groups = <List<String>>[];
+
+    for (final championship in championships) {
+      for (final team in championship.teams) {
+        final ids = team.activePlayers
+            .map((p) => p.playerId)
+            .where((id) => id.trim().isNotEmpty)
+            .toSet()
+            .toList();
+        if (ids.length > 1) groups.add(ids);
+      }
+    }
+
+    return groups;
+  }
+
+  List<List<String>> _teamGroupsFromTeams(List<Team> teams) {
+    return teams
+        .map((team) => team.activePlayers
+            .map((p) => p.playerId)
+            .where((id) => id.trim().isNotEmpty)
+            .toSet()
+            .toList())
+        .where((ids) => ids.length > 1)
+        .toList();
+  }
+
+  // ── Montagem manual ───────────────────────────────────────────
+  void _goToManualTeams() {
+    final selected = _allPlayers.where((p) => _selectedIds.contains(p.id)).toList();
+    if (selected.length < 2) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Text('Selecione pelo menos 2 jogadores'),
+        backgroundColor: AppColors.loss,
+      ));
+      return;
+    }
+
+    _teams = _buildDefaultManualTeams();
+    _syncTeamControllers();
+
+    setState(() {
+      _step = 2;
+    });
+  }
+
+  List<Team> _buildDefaultManualTeams() {
     const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     final colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00ACC1', '#F4511E', '#6D4C41'];
-
-    final emptyTeams = List.generate(fullTeams, (i) => Team(
+    return List.generate(2, (i) => Team(
       id: _uuid.v4(),
       name: 'Time ${letters[i % 26]}',
       color: colors[i % colors.length],
       players: [],
     ));
+  }
 
+  void _syncTeamControllers() {
+    while (_teamNameCtrls.length < _teams.length) {
+      _teamNameCtrls.add(TextEditingController(text: _teams[_teamNameCtrls.length].name));
+    }
+    while (_teamNameCtrls.length > _teams.length) {
+      final ctrl = _teamNameCtrls.removeLast();
+      ctrl.dispose();
+    }
+    for (int i = 0; i < _teams.length && i < _teamNameCtrls.length; i++) {
+      if (_teamNameCtrls[i].text.trim().isEmpty) {
+        _teamNameCtrls[i].text = _teams[i].name;
+      }
+    }
+  }
+
+  void _addManualTeam() {
+    final index = _teams.length;
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final colors = ['#E53935', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00ACC1', '#F4511E', '#6D4C41'];
     setState(() {
-      _teams = emptyTeams;
-      _step = 2;
+      _teams.add(Team(
+        id: _uuid.v4(),
+        name: 'Time ${letters[index % 26]}',
+        color: colors[index % colors.length],
+        players: [],
+      ));
+      _syncTeamControllers();
+    });
+  }
+
+  void _removeManualTeam(int index) {
+    if (_teams.length <= 2) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Mantenha pelo menos 2 times'),
+        backgroundColor: AppColors.loss,
+      ));
+      return;
+    }
+    setState(() {
+      _teams.removeAt(index);
+      _syncTeamControllers();
     });
   }
 
@@ -178,6 +310,11 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
       return;
     }
 
+    for (int i = 0; i < _teams.length && i < _teamNameCtrls.length; i++) {
+      final name = _teamNameCtrls[i].text.trim();
+      if (name.isNotEmpty) _teams[i].name = name;
+    }
+
     setState(() => _loading = true);
     try {
       final champId = _uuid.v4();
@@ -227,6 +364,7 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
         status: ChampionshipStatus.inProgress,
         balanceTeams: _balanceTeams,
         teamSize: _teamSize,
+        seasonId: _selectedSeason?.id,
       );
       await _champRepo.save(champ);
 
@@ -251,7 +389,7 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
     return 'Rodada Classificatória';
   }
 
-  void _nextStep() {
+  Future<void> _nextStep() async {
     if (_step == 0) {
       setState(() => _step = 1);
     } else if (_step == 1) {
@@ -265,7 +403,7 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
       if (_manualTeams) {
         _goToManualTeams();
       } else {
-        _drawTeamsAuto();
+        await _drawTeamsAuto();
       }
     } else {
       _create();
@@ -304,6 +442,12 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
           final active = i == _step;
           final done = i < _step;
           final isLast = i == _stepLabels.length - 1;
+          final circleColor = done
+              ? AppColors.primaryDark
+              : active
+                  ? AppColors.primary
+                  : AppColors.surfaceLight;
+
           return Expanded(
             child: Row(
               children: [
@@ -313,25 +457,55 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
                     children: [
                       AnimatedContainer(
                         duration: const Duration(milliseconds: 250),
-                        width: 30, height: 30,
+                        width: 30,
+                        height: 30,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          color: done ? AppColors.win : active ? AppColors.primary : AppColors.surfaceLight,
-                          border: Border.all(color: active ? AppColors.accent : Colors.transparent, width: 2),
+                          color: circleColor,
+                          border: Border.all(
+                            color: active ? AppColors.accentLight : Colors.transparent,
+                            width: 2,
+                          ),
+                          boxShadow: active
+                              ? [
+                                  BoxShadow(
+                                    color: AppColors.primary.withOpacity(0.28),
+                                    blurRadius: 10,
+                                    spreadRadius: 1,
+                                  ),
+                                ]
+                              : null,
                         ),
                         child: Center(
                           child: done
-                              ? const Icon(Icons.check_rounded, color: Colors.white, size: 14)
-                              : Text('${i + 1}', style: TextStyle(
-                                  color: active ? Colors.white : AppColors.textHint,
-                                  fontSize: 12, fontWeight: FontWeight.bold)),
+                              ? const Icon(
+                                  Icons.check_rounded,
+                                  color: Colors.white,
+                                  size: 14,
+                                )
+                              : Text(
+                                  '${i + 1}',
+                                  style: TextStyle(
+                                    color: active ? AppColors.background : AppColors.textHint,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 4),
-                      Text(_stepLabels[i], style: TextStyle(
-                        color: active ? AppColors.accent : done ? AppColors.textSecondary : AppColors.textHint,
-                        fontSize: 10, fontWeight: active ? FontWeight.bold : FontWeight.normal,
-                      )),
+                      Text(
+                        _stepLabels[i],
+                        style: TextStyle(
+                          color: active
+                              ? AppColors.primaryLight
+                              : done
+                                  ? AppColors.textSecondary
+                                  : AppColors.textHint,
+                          fontSize: 10,
+                          fontWeight: active ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -340,7 +514,7 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
                     child: Container(
                       height: 2,
                       margin: const EdgeInsets.only(bottom: 18),
-                      color: i < _step ? AppColors.win : AppColors.surfaceLight,
+                      color: i < _step ? AppColors.primaryDark : AppColors.surfaceLight,
                     ),
                   ),
               ],
@@ -373,6 +547,58 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
               prefixIcon: const Icon(Icons.emoji_events_rounded, color: AppColors.accent),
             ),
           ),
+
+          const SizedBox(height: 20),
+          const Text('Temporada', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+          const SizedBox(height: 8),
+          if (_seasons.isEmpty)
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Text('Nenhuma temporada encontrada',
+                  style: TextStyle(color: AppColors.textHint, fontSize: 13)),
+            )
+          else
+            DropdownButtonFormField<String>(
+              value: _selectedSeason?.id,
+              dropdownColor: AppColors.surface,
+              style: const TextStyle(color: AppColors.textPrimary),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: AppColors.surfaceLight,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none,
+                ),
+                prefixIcon: const Icon(Icons.event_note_rounded, color: AppColors.accent),
+              ),
+              items: _seasons.map((s) => DropdownMenuItem(
+                value: s.id,
+                child: Row(
+                  children: [
+                    Text(s.name),
+                    if (s.id == _activeSeasonId) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: AppColors.win.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text('atual', style: TextStyle(color: AppColors.win, fontSize: 10)),
+                      ),
+                    ],
+                  ],
+                ),
+              )).toList(),
+              onChanged: (id) {
+                if (id == null) return;
+                setState(() => _selectedSeason = _seasons.firstWhere((s) => s.id == id));
+              },
+            ),
 
           const SizedBox(height: 28),
           const Text('Modo de disputa', style: TextStyle(color: AppColors.textSecondary, fontSize: 13)),
@@ -557,7 +783,7 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
               ),
               if (!_manualTeams)
                 TextButton.icon(
-                  onPressed: _drawTeamsAuto,
+                  onPressed: _loading ? null : () => _drawTeamsAuto(),
                   icon: const Icon(Icons.shuffle_rounded, size: 16, color: AppColors.accent),
                   label: const Text('Sortear novamente', style: TextStyle(color: AppColors.accent, fontSize: 13)),
                 ),
@@ -580,56 +806,68 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
   // ── Editor manual de times ────────────────────────────────────
   Widget _buildManualEditor() {
     final selectedPlayers = _allPlayers.where((p) => _selectedIds.contains(p.id)).toList();
-
-    // Jogadores já alocados
     final allocatedIds = _teams.expand((t) => t.players.map((p) => p.playerId)).toSet();
     final unallocated = selectedPlayers.where((p) => !allocatedIds.contains(p.id)).toList();
 
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
-        // Jogadores não alocados
-        if (unallocated.isNotEmpty) ...[
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: AppColors.card,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.draw.withOpacity(0.4)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: AppColors.card,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.draw.withOpacity(0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
                   const Icon(Icons.person_outline, color: AppColors.draw, size: 16),
                   const SizedBox(width: 6),
-                  Text('Sem time (${unallocated.length})',
+                  Text('Jogadores sem time (${unallocated.length})',
                       style: const TextStyle(color: AppColors.draw, fontWeight: FontWeight.bold, fontSize: 13)),
-                ]),
-                const SizedBox(height: 8),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _addManualTeam,
+                    icon: const Icon(Icons.add_rounded, size: 16, color: AppColors.accent),
+                    label: const Text('Adicionar time', style: TextStyle(color: AppColors.accent)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              if (unallocated.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 6),
+                  child: Text('Todos os jogadores já foram distribuídos.', style: TextStyle(color: AppColors.textHint, fontSize: 12)),
+                )
+              else
                 Wrap(
-                  spacing: 8, runSpacing: 6,
+                  spacing: 8,
+                  runSpacing: 6,
                   children: unallocated.map((p) => _DraggablePlayerChip(
                     player: p,
                     onAssign: (teamIndex) {
                       setState(() {
-                        _teams[teamIndex].players.add(TeamPlayer(playerId: p.id, playerName: p.name));
+                        if (teamIndex >= 0 && teamIndex < _teams.length) {
+                          _teams[teamIndex].players.add(TeamPlayer(playerId: p.id, playerName: p.name));
+                        }
                       });
                     },
                     teamNames: _teams.map((t) => t.name).toList(),
                   )).toList(),
                 ),
-              ],
-            ),
+            ],
           ),
-          const SizedBox(height: 12),
-        ],
+        ),
+        const SizedBox(height: 12),
 
-        // Times editáveis
         ..._teams.asMap().entries.map((e) {
           final i = e.key;
           final team = e.value;
           final color = _teamColor(team);
+          final controller = _teamNameCtrls[i];
           return Container(
             margin: const EdgeInsets.only(bottom: 12),
             decoration: BoxDecoration(
@@ -639,7 +877,6 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
             ),
             child: Column(
               children: [
-                // Header
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
@@ -650,8 +887,24 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
                     children: [
                       Container(width: 12, height: 12, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
                       const SizedBox(width: 8),
-                      Text(team.name, style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold)),
-                      const Spacer(),
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          style: const TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.bold),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            hintText: 'Nome do time',
+                            hintStyle: TextStyle(color: AppColors.textHint),
+                          ),
+                          onChanged: (value) => _teams[i].name = value.trim().isEmpty ? 'Time ${i + 1}' : value.trim(),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete_rounded, color: AppColors.loss, size: 18),
+                        onPressed: () => _removeManualTeam(i),
+                        visualDensity: VisualDensity.compact,
+                      ),
                       Text('${team.players.length}/$_teamSize', style: TextStyle(
                         color: team.players.length == _teamSize ? AppColors.win : AppColors.textHint,
                         fontSize: 12,
@@ -659,7 +912,6 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
                     ],
                   ),
                 ),
-                // Jogadores do time
                 if (team.players.isEmpty)
                   const Padding(
                     padding: EdgeInsets.all(12),
@@ -680,23 +932,17 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
                       ),
                     );
                   }),
-
-                // Botão adicionar jogador
-                if (team.players.length < _teamSize + 2)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                    child: _AddPlayerButton(
-                      availablePlayers: selectedPlayers.where((p) {
-                        // Permite adicionar jogador que não está neste time
-                        return !team.players.any((tp) => tp.playerId == p.id);
-                      }).toList(),
-                      onAdd: (player) {
-                        setState(() {
-                          _teams[i].players.add(TeamPlayer(playerId: player.id, playerName: player.name));
-                        });
-                      },
-                    ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                  child: _AddPlayerButton(
+                    availablePlayers: unallocated,
+                    onAdd: (player) {
+                      setState(() {
+                        _teams[i].players.add(TeamPlayer(playerId: player.id, playerName: player.name));
+                      });
+                    },
                   ),
+                ),
               ],
             ),
           );
@@ -712,47 +958,71 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
 
   Widget _buildBottomBar() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(top: BorderSide(color: AppColors.surfaceLight)),
       ),
-      child: Row(
-        children: [
-          if (_step > 0) ...[
-            SizedBox(
-              height: 50,
-              child: OutlinedButton(
-                onPressed: () => setState(() => _step--),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: AppColors.surfaceLight),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
+      child: SafeArea(
+        top: false,
+        minimum: const EdgeInsets.only(bottom: 8),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: [
+              if (_step > 0) ...[
+                SizedBox(
+                  height: 50,
+                  child: OutlinedButton(
+                    onPressed: () => setState(() => _step--),
+                    style: OutlinedButton.styleFrom(
+                      side: const BorderSide(color: AppColors.surfaceLight),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                    ),
+                    child: const Text('Voltar', style: TextStyle(color: AppColors.textSecondary)),
+                  ),
                 ),
-                child: const Text('Voltar', style: TextStyle(color: AppColors.textSecondary)),
-              ),
-            ),
-            const SizedBox(width: 12),
-          ],
-          Expanded(
-            child: SizedBox(
-              height: 50,
-              child: ElevatedButton(
-                onPressed: _loading ? null : _nextStep,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primary,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: SizedBox(
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _loading ? null : () => _nextStep(),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.primary,
+                      foregroundColor: AppColors.background,
+                      disabledBackgroundColor: AppColors.surfaceLight,
+                      disabledForegroundColor: AppColors.textHint,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: _loading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: AppColors.background,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : Text(
+                            _step == 0
+                                ? 'Próximo: Jogadores'
+                                : _step == 1
+                                    ? (_manualTeams ? 'Montar Times' : 'Sortear Times')
+                                    : 'Criar Campeonato',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                  ),
                 ),
-                child: _loading
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : Text(
-                        _step == 0 ? 'Próximo: Jogadores' : _step == 1 ? (_manualTeams ? 'Montar Times' : 'Sortear Times') : 'Criar Campeonato',
-                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                      ),
               ),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -760,6 +1030,9 @@ class _NewChampionshipScreenState extends State<NewChampionshipScreen> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    for (final ctrl in _teamNameCtrls) {
+      ctrl.dispose();
+    }
     super.dispose();
   }
 }

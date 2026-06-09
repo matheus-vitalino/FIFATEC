@@ -83,7 +83,7 @@ class _PlayersScreenState extends State<PlayersScreen> {
                             : 'Tente outro nome',
                       )
                     : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: EdgeInsets.fromLTRB(16, 0, 16, MediaQuery.of(context).padding.bottom + 80),
                         itemCount: _filtered.length,
                         itemBuilder: (context, i) {
                           final p = _filtered[i];
@@ -158,6 +158,10 @@ class _PlayerCard extends StatelessWidget {
                       _mini(Icons.emoji_events, '${player.titles}', AppColors.accent),
                       const SizedBox(width: 10),
                       _mini(Icons.sports_kabaddi, '${player.matchesPlayed}', AppColors.textHint),
+                      if (player.ownGoals > 0) ...[
+                        const SizedBox(width: 10),
+                        _mini(Icons.warning_rounded, '${player.ownGoals}', AppColors.loss),
+                      ],
                     ],
                   ),
                 ],

@@ -21,7 +21,7 @@ class DatabaseHelper {
 
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _createTables,
       onUpgrade: _onUpgrade,
     );
@@ -38,6 +38,10 @@ class DatabaseHelper {
     }
 
     if (oldVersion < 3) {
+      try {
+        await db.execute('ALTER TABLE players ADD COLUMN ownGoals INTEGER DEFAULT 0');
+      } catch (_) {}
+
       await db.execute('''
         CREATE TABLE IF NOT EXISTS player_season_stats (
           seasonId TEXT NOT NULL,
@@ -46,6 +50,7 @@ class DatabaseHelper {
           wins INTEGER DEFAULT 0,
           losses INTEGER DEFAULT 0,
           goals INTEGER DEFAULT 0,
+          ownGoals INTEGER DEFAULT 0,
           assists INTEGER DEFAULT 0,
           vices INTEGER DEFAULT 0,
           finals INTEGER DEFAULT 0,
@@ -55,6 +60,15 @@ class DatabaseHelper {
       ''');
 
       await _migrateLegacyPlayersToGlobal(db);
+    }
+
+    if (oldVersion < 4) {
+      try {
+        await db.execute('ALTER TABLE players ADD COLUMN ownGoals INTEGER DEFAULT 0');
+      } catch (_) {}
+      try {
+        await db.execute('ALTER TABLE player_season_stats ADD COLUMN ownGoals INTEGER DEFAULT 0');
+      } catch (_) {}
     }
   }
 
@@ -80,6 +94,7 @@ class DatabaseHelper {
         'wins': 0,
         'losses': 0,
         'goals': 0,
+        'ownGoals': 0,
         'assists': 0,
         'vices': 0,
         'finals': 0,
@@ -96,6 +111,7 @@ class DatabaseHelper {
         final wins = (entry['wins'] as int?) ?? 0;
         final losses = (entry['losses'] as int?) ?? 0;
         final goals = (entry['goals'] as int?) ?? 0;
+        final ownGoals = (entry['ownGoals'] as int?) ?? 0;
         final assists = (entry['assists'] as int?) ?? 0;
         final vices = (entry['vices'] as int?) ?? 0;
         final finals = (entry['finals'] as int?) ?? 0;
@@ -105,6 +121,7 @@ class DatabaseHelper {
         merged['wins'] += wins;
         merged['losses'] += losses;
         merged['goals'] += goals;
+        merged['ownGoals'] += ownGoals;
         merged['assists'] += assists;
         merged['vices'] += vices;
         merged['finals'] += finals;
@@ -117,6 +134,7 @@ class DatabaseHelper {
             'wins': 0,
             'losses': 0,
             'goals': 0,
+            'ownGoals': 0,
             'assists': 0,
             'vices': 0,
             'finals': 0,
@@ -126,6 +144,7 @@ class DatabaseHelper {
           totals['wins'] = totals['wins']! + wins;
           totals['losses'] = totals['losses']! + losses;
           totals['goals'] = totals['goals']! + goals;
+          totals['ownGoals'] = totals['ownGoals']! + ownGoals;
           totals['assists'] = totals['assists']! + assists;
           totals['vices'] = totals['vices']! + vices;
           totals['finals'] = totals['finals']! + finals;
@@ -184,6 +203,7 @@ class DatabaseHelper {
         wins INTEGER DEFAULT 0,
         losses INTEGER DEFAULT 0,
         goals INTEGER DEFAULT 0,
+        ownGoals INTEGER DEFAULT 0,
         assists INTEGER DEFAULT 0,
         vices INTEGER DEFAULT 0,
         finals INTEGER DEFAULT 0,
@@ -230,6 +250,7 @@ class DatabaseHelper {
         wins INTEGER DEFAULT 0,
         losses INTEGER DEFAULT 0,
         goals INTEGER DEFAULT 0,
+        ownGoals INTEGER DEFAULT 0,
         assists INTEGER DEFAULT 0,
         vices INTEGER DEFAULT 0,
         finals INTEGER DEFAULT 0,
@@ -303,6 +324,7 @@ class DatabaseHelper {
     int winsDelta = 0,
     int lossesDelta = 0,
     int goalsDelta = 0,
+    int ownGoalsDelta = 0,
     int assistsDelta = 0,
     int vicesDelta = 0,
     int finalsDelta = 0,
@@ -316,6 +338,7 @@ class DatabaseHelper {
       'wins': ((current?['wins'] as int?) ?? 0) + winsDelta,
       'losses': ((current?['losses'] as int?) ?? 0) + lossesDelta,
       'goals': ((current?['goals'] as int?) ?? 0) + goalsDelta,
+      'ownGoals': ((current?['ownGoals'] as int?) ?? 0) + ownGoalsDelta,
       'assists': ((current?['assists'] as int?) ?? 0) + assistsDelta,
       'vices': ((current?['vices'] as int?) ?? 0) + vicesDelta,
       'finals': ((current?['finals'] as int?) ?? 0) + finalsDelta,
@@ -420,34 +443,320 @@ class DatabaseHelper {
     return db.query('player_season_stats');
   }
 
-  Future<void> importAll(Map<String, dynamic> data) async {
+  Future<void> importSelected(
+    Map<String, dynamic> data, {
+    bool importPlayers = true,
+    bool importPlayerStats = true,
+    bool importChampionships = true,
+    bool importMatches = true,
+    bool importSeasons = true,
+    bool importSettings = true,
+    bool overwrite = true,
+  }) async {
     final db = await database;
-    await db.transaction((txn) async {
-      await txn.delete('players');
-      await txn.delete('player_season_stats');
-      await txn.delete('championships');
-      await txn.delete('matches');
-      await txn.delete('seasons');
-      await txn.delete('settings');
 
-      for (final p in (data['players'] as List? ?? [])) {
-        await txn.insert('players', p as Map<String, dynamic>, conflictAlgorithm: ConflictAlgorithm.replace);
+    if (overwrite) {
+      // ── Modo SOBRESCREVER ──────────────────────────────────────────────────
+      await db.transaction((txn) async {
+        if (importPlayers) {
+          // Antes de apagar, resolve duplicatas por nome dentro do próprio backup.
+          // Se houver 2 jogadores com mesmo nome no backup, o último vence.
+          final backupPlayers = _mapList(data['players']);
+          final deduped = <String, Map<String, dynamic>>{};
+          for (final player in backupPlayers) {
+            final nameKey = ((player['name'] as String?) ?? '').trim().toLowerCase();
+            deduped[nameKey] = player; // sobrescreve: último vence
+          }
+          final playersToInsert = deduped.values.toList();
+
+          await txn.delete('players');
+          if (importPlayerStats) await txn.delete('player_season_stats');
+
+          for (final player in playersToInsert) {
+            await txn.insert('players', player,
+                conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+
+          if (importPlayerStats) {
+            // Só insere stats cujo playerId exista no backup deduplicado
+            final validIds = playersToInsert
+                .map((p) => p['id'] as String? ?? '')
+                .toSet();
+            for (final stats in _mapList(data['playerSeasonStats'])) {
+              final pid = stats['playerId'] as String? ?? '';
+              if (!validIds.contains(pid)) continue;
+              await txn.insert('player_season_stats', stats,
+                  conflictAlgorithm: ConflictAlgorithm.replace);
+            }
+          }
+        } else if (importPlayerStats) {
+          // Importar só stats sem importar jogadores:
+          // só aplica stats de jogadores que já existem no banco.
+          final existingIds = (await txn.query('players', columns: ['id']))
+              .map((r) => r['id'] as String)
+              .toSet();
+          await txn.delete('player_season_stats');
+          for (final stats in _mapList(data['playerSeasonStats'])) {
+            final pid = stats['playerId'] as String? ?? '';
+            if (!existingIds.contains(pid)) continue;
+            await txn.insert('player_season_stats', stats,
+                conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+        }
+
+        if (importChampionships) {
+          await txn.delete('championships');
+          for (final championship in _mapList(data['championships'])) {
+            await txn.insert(
+              'championships',
+              {'id': championship['id'], 'data': jsonEncode(championship)},
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
+
+        if (importMatches) {
+          await txn.delete('matches');
+          for (final match in _mapList(data['matches'])) {
+            await txn.insert(
+              'matches',
+              {
+                'id': match['id'],
+                'championshipId': match['championshipId'],
+                'data': jsonEncode(match),
+              },
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
+
+        if (importSeasons) {
+          await txn.delete('seasons');
+          for (final season in _mapList(data['seasons'])) {
+            await txn.insert(
+              'seasons',
+              {'id': season['id'], 'data': jsonEncode(season)},
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        }
+
+        if (importSettings && data['settings'] != null) {
+          await txn.delete('settings');
+          await txn.insert(
+            'settings',
+            {'id': 1, 'data': jsonEncode(data['settings'])},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      });
+      return;
+    }
+
+    // ── Modo JUNTAR ───────────────────────────────────────────────────────────
+
+    // 1) Temporadas: mapa nome → id existente no banco
+    final Map<String, String> existingSeasonNameToId = {};
+    // oldSeasonId (do backup) → resolvedSeasonId (no banco após import)
+    final Map<String, String> seasonIdRemap = {};
+
+    if (importSeasons) {
+      final existingRows = await db.query('seasons');
+      for (final row in existingRows) {
+        final decoded =
+            jsonDecode(row['data'] as String) as Map<String, dynamic>;
+        final name =
+            ((decoded['name'] as String?) ?? '').trim().toLowerCase();
+        final id = row['id'] as String;
+        if (name.isNotEmpty) existingSeasonNameToId[name] = id;
       }
-      for (final s in (data['playerSeasonStats'] as List? ?? [])) {
-        await txn.insert('player_season_stats', s as Map<String, dynamic>, conflictAlgorithm: ConflictAlgorithm.replace);
+
+      for (final season in _mapList(data['seasons'])) {
+        final backupId = season['id'] as String? ?? '';
+        final backupName = ((season['name'] as String?) ?? '').trim();
+        final backupNameKey = backupName.toLowerCase();
+
+        if (existingSeasonNameToId.containsKey(backupNameKey)) {
+          final existingId = existingSeasonNameToId[backupNameKey]!;
+          seasonIdRemap[backupId] = existingId;
+        } else {
+          await db.insert(
+            'seasons',
+            {'id': backupId, 'data': jsonEncode(season)},
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+          seasonIdRemap[backupId] = backupId;
+          existingSeasonNameToId[backupNameKey] = backupId;
+        }
       }
-      for (final c in (data['championships'] as List? ?? [])) {
-        await txn.insert('championships', {'id': (c as Map)['id'], 'data': jsonEncode(c)}, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    // 2) Jogadores: juntar somando stats globais; não duplicar por nome
+    if (importPlayers) {
+      final existingRows = await db.query('players');
+      final Map<String, Map<String, dynamic>> existingById = {
+        for (final r in existingRows) r['id'] as String: r,
+      };
+      final Map<String, String> existingNameToId = {
+        for (final r in existingRows)
+          ((r['name'] as String?) ?? '').trim().toLowerCase():
+              r['id'] as String,
+      };
+
+      for (final player in _mapList(data['players'])) {
+        final backupPlayerId = player['id'] as String? ?? '';
+        final backupName = ((player['name'] as String?) ?? '').trim();
+        final backupNameKey = backupName.toLowerCase();
+
+        if (existingById.containsKey(backupPlayerId)) {
+          final existing =
+              Map<String, dynamic>.from(existingById[backupPlayerId]!);
+          final merged = _mergePlayers(existing, player);
+          await db.update('players', merged,
+              where: 'id = ?', whereArgs: [backupPlayerId]);
+        } else if (existingNameToId.containsKey(backupNameKey)) {
+          final existingId = existingNameToId[backupNameKey]!;
+          final existing =
+              Map<String, dynamic>.from(existingById[existingId]!);
+          final merged = _mergePlayers(existing, player);
+          await db.update('players', merged,
+              where: 'id = ?', whereArgs: [existingId]);
+        } else {
+          await db.insert('players', player,
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+          existingById[backupPlayerId] = player;
+          existingNameToId[backupNameKey] = backupPlayerId;
+        }
       }
-      for (final m in (data['matches'] as List? ?? [])) {
-        await txn.insert('matches', {'id': (m as Map)['id'], 'championshipId': m['championshipId'], 'data': jsonEncode(m)}, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    // 3) player_season_stats: soma se jogador existir, ignora se não existir
+    if (importPlayerStats) {
+      // IDs de jogadores que existem no banco (após possível import acima)
+      final existingPlayerIds = (await db.query('players', columns: ['id']))
+          .map((r) => r['id'] as String)
+          .toSet();
+
+      for (final stats in _mapList(data['playerSeasonStats'])) {
+        final backupSeasonId = stats['seasonId'] as String? ?? '';
+        final playerId = stats['playerId'] as String? ?? '';
+
+        // Ignora stats de jogadores que não existem no banco
+        if (!existingPlayerIds.contains(playerId)) continue;
+
+        final resolvedSeasonId = importSeasons
+            ? (seasonIdRemap[backupSeasonId] ?? backupSeasonId)
+            : backupSeasonId;
+
+        final existing = await db.query(
+          'player_season_stats',
+          where: 'seasonId = ? AND playerId = ?',
+          whereArgs: [resolvedSeasonId, playerId],
+        );
+
+        if (existing.isNotEmpty) {
+          final cur = existing.first;
+          final merged = {
+            'seasonId': resolvedSeasonId,
+            'playerId': playerId,
+            'matchesPlayed':
+                _sumInt(cur['matchesPlayed'], stats['matchesPlayed']),
+            'wins': _sumInt(cur['wins'], stats['wins']),
+            'losses': _sumInt(cur['losses'], stats['losses']),
+            'goals': _sumInt(cur['goals'], stats['goals']),
+            'ownGoals': _sumInt(cur['ownGoals'], stats['ownGoals']),
+            'assists': _sumInt(cur['assists'], stats['assists']),
+            'vices': _sumInt(cur['vices'], stats['vices']),
+            'finals': _sumInt(cur['finals'], stats['finals']),
+            'titles': _sumInt(cur['titles'], stats['titles']),
+          };
+          await db.update(
+            'player_season_stats',
+            merged,
+            where: 'seasonId = ? AND playerId = ?',
+            whereArgs: [resolvedSeasonId, playerId],
+          );
+        } else {
+          final newStats = Map<String, dynamic>.from(stats);
+          newStats['seasonId'] = resolvedSeasonId;
+          await db.insert('player_season_stats', newStats,
+              conflictAlgorithm: ConflictAlgorithm.replace);
+        }
       }
-      for (final s in (data['seasons'] as List? ?? [])) {
-        await txn.insert('seasons', {'id': (s as Map)['id'], 'data': jsonEncode(s)}, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    // 4) Campeonatos
+    if (importChampionships) {
+      for (final championship in _mapList(data['championships'])) {
+        await db.insert(
+          'championships',
+          {'id': championship['id'], 'data': jsonEncode(championship)},
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
       }
-      if (data['settings'] != null) {
-        await txn.insert('settings', {'id': 1, 'data': jsonEncode(data['settings'])}, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
+
+    // 5) Partidas
+    if (importMatches) {
+      for (final match in _mapList(data['matches'])) {
+        await db.insert(
+          'matches',
+          {
+            'id': match['id'],
+            'championshipId': match['championshipId'],
+            'data': jsonEncode(match),
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
       }
-    });
+    }
+
+    // 6) Configurações
+    if (importSettings && data['settings'] != null) {
+      await db.insert(
+        'settings',
+        {'id': 1, 'data': jsonEncode(data['settings'])},
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    }
+  }
+
+  /// Soma as stats numéricas de dois mapas de jogador (mantém metadados do existente).
+  Map<String, dynamic> _mergePlayers(
+    Map<String, dynamic> existing,
+    Map<String, dynamic> incoming,
+  ) {
+    return {
+      ...existing,
+      'matchesPlayed': _sumInt(existing['matchesPlayed'], incoming['matchesPlayed']),
+      'wins': _sumInt(existing['wins'], incoming['wins']),
+      'losses': _sumInt(existing['losses'], incoming['losses']),
+      'goals': _sumInt(existing['goals'], incoming['goals']),
+      'ownGoals': _sumInt(existing['ownGoals'], incoming['ownGoals']),
+      'assists': _sumInt(existing['assists'], incoming['assists']),
+      'vices': _sumInt(existing['vices'], incoming['vices']),
+      'finals': _sumInt(existing['finals'], incoming['finals']),
+      'titles': _sumInt(existing['titles'], incoming['titles']),
+      // Preenche foto/descrição se estiver vazia no existente
+      'photoPath': (existing['photoPath'] as String? ?? '').isNotEmpty
+          ? existing['photoPath']
+          : incoming['photoPath'],
+      'description': (existing['description'] as String? ?? '').isNotEmpty
+          ? existing['description']
+          : incoming['description'],
+    };
+  }
+
+  int _sumInt(dynamic a, dynamic b) => ((a as int?) ?? 0) + ((b as int?) ?? 0);
+
+  Future<void> importAll(Map<String, dynamic> data) async {
+    await importSelected(data);
+  }
+
+  List<Map<String, dynamic>> _mapList(dynamic value) {
+    return (value as List? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
   }
 }

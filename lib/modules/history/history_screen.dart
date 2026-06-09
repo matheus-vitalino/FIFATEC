@@ -121,7 +121,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
                 Expanded(
                   child: TabBarView(
                     controller: _tab,
-                    children: [_buildChamps(), _buildMatches()],
+                    children: [_buildChamps(context), _buildMatches(context)],
                   ),
                 ),
               ],
@@ -129,7 +129,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildChamps() {
+  Widget _buildChamps(BuildContext context) {
     if (_champs.isEmpty) {
       return const EmptyState(
         icon: Icons.emoji_events_outlined,
@@ -138,13 +138,13 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
       itemCount: _champs.length,
       itemBuilder: (_, i) {
         final c = _champs[i];
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
           decoration: BoxDecoration(
             color: AppColors.card,
             borderRadius: BorderRadius.circular(14),
@@ -256,7 +256,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
 
   Widget _winnerPhotoPlaceholder() => const Icon(Icons.emoji_events_rounded, color: AppColors.textHint, size: 24);
 
-  Widget _buildMatches() {
+  Widget _buildMatches(BuildContext context) {
     if (_matches.isEmpty) {
       return const EmptyState(
         icon: Icons.sports_soccer_outlined,
@@ -265,7 +265,7 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
       );
     }
     return ListView.builder(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).padding.bottom + 80),
       itemCount: _matches.length,
       itemBuilder: (_, i) {
         final m = _matches[i];
@@ -351,20 +351,34 @@ class _HistoryScreenState extends State<HistoryScreen> with SingleTickerProvider
               ),
               if (m.goals.isNotEmpty) ...[
                 const Divider(color: AppColors.surfaceLight, height: 16),
-                ...m.goals.map((g) => Padding(
-                  padding: const EdgeInsets.only(bottom: 3),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.sports_soccer, size: 12, color: AppColors.goal),
-                      const SizedBox(width: 6),
-                      Text(g.playerName, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
-                      if (m.showGoalTime) ...[
+                ...m.goals.map((g) {
+                  final isTeamA = g.teamId == m.teamA.id;
+                  final teamName = isTeamA ? m.teamA.name : m.teamB.name;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Row(
+                      children: [
+                        Icon(
+                          g.isOwnGoal ? Icons.warning_rounded : Icons.sports_soccer,
+                          size: 12,
+                          color: g.isOwnGoal ? AppColors.loss : AppColors.goal,
+                        ),
                         const SizedBox(width: 6),
-                        Text(AppDateUtils.formatDuration(g.timeSeconds), style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+                        Expanded(
+                          child: Text(
+                            g.isOwnGoal ? 'Gol contra: ${g.playerName} • ponto para $teamName' : g.playerName,
+                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (m.showGoalTime) ...[
+                          const SizedBox(width: 6),
+                          Text(AppDateUtils.formatDuration(g.timeSeconds), style: const TextStyle(color: AppColors.textHint, fontSize: 11)),
+                        ],
                       ],
-                    ],
-                  ),
-                )),
+                    ),
+                  );
+                }),
               ],
             ],
           ),

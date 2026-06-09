@@ -5,6 +5,7 @@ class PlayerSeasonStats {
   int wins;
   int losses;
   int goals;
+  int ownGoals;
   int assists;
   int vices;
   int finals;
@@ -17,6 +18,7 @@ class PlayerSeasonStats {
     this.wins = 0,
     this.losses = 0,
     this.goals = 0,
+    this.ownGoals = 0,
     this.assists = 0,
     this.vices = 0,
     this.finals = 0,
@@ -30,6 +32,7 @@ class PlayerSeasonStats {
         'wins': wins,
         'losses': losses,
         'goals': goals,
+        'ownGoals': ownGoals,
         'assists': assists,
         'vices': vices,
         'finals': finals,
@@ -43,6 +46,7 @@ class PlayerSeasonStats {
         wins: (map['wins'] as int?) ?? 0,
         losses: (map['losses'] as int?) ?? 0,
         goals: (map['goals'] as int?) ?? 0,
+        ownGoals: (map['ownGoals'] as int?) ?? 0,
         assists: (map['assists'] as int?) ?? 0,
         vices: (map['vices'] as int?) ?? 0,
         finals: (map['finals'] as int?) ?? 0,
@@ -54,6 +58,7 @@ class PlayerSeasonStats {
     int? wins,
     int? losses,
     int? goals,
+    int? ownGoals,
     int? assists,
     int? vices,
     int? finals,
@@ -66,6 +71,7 @@ class PlayerSeasonStats {
         wins: wins ?? this.wins,
         losses: losses ?? this.losses,
         goals: goals ?? this.goals,
+        ownGoals: ownGoals ?? this.ownGoals,
         assists: assists ?? this.assists,
         vices: vices ?? this.vices,
         finals: finals ?? this.finals,

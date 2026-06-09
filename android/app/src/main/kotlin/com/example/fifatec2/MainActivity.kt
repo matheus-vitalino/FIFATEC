@@ -1,4 +1,4 @@
-package com.example.app_timinho
+package com.fatec.fifatec
 
 import io.flutter.embedding.android.FlutterActivity
 
