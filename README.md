@@ -1,17 +1,32 @@
-# fifatec
+# ⚽ FIFATEC
 
-A new Flutter project.
+FIFATEC é um aplicativo desenvolvido em Flutter para organização de partidas e campeonatos de futebol entre amigos e alunos da nossa escola.
 
-## Getting Started
+O app permite cadastrar jogadores, montar times, controlar partidas com cronômetro, registrar gols, acompanhar histórico de campeonatos e visualizar rankings de desempenho.
 
-This project is a starting point for a Flutter application.
+## 🚀 Funcionalidades
 
-A few resources to get you started if this is your first Flutter project:
+- Cadastro de jogadores com foto
+- Criação de times
+- Montagem automática de times
+- Cronômetro com atraso configurável
+- Registro de gols e resultados
+- Histórico de campeonatos
+- Ranking de jogadores, duplas e trios
+- Sistema de temporadas
+- Backup local e online com Google Drive
+- Funcionamento offline com dados salvos no dispositivo
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## 🛠️ Tecnologias utilizadas
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Flutter
+- Dart
+- SQLite / sqflite
+- Google Drive API
+
+## 📦 Como executar o projeto
+
+Clone o repositório:
+
+```bash
+git clone https://github.com/matheus-vitalino/FIFATEC.git
